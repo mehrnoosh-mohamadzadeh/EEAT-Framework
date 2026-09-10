@@ -9,6 +9,7 @@ import re
 from extractors.base import BaseExtractor, IndicatorResult
 from utils.domain_utils import is_authoritative_domain
 from utils.text_utils import tokenize_words, tokenize_sentences
+from utils.settings_loader import get_threshold
 
 
 BIO_LINK_PATTERNS = ["درباره-نویسنده", "درباره_نویسنده", "author", "نویسنده:"]
@@ -92,7 +93,7 @@ class ExpertiseExtractor(BaseExtractor):
     def _x3_authoritative_citations_ratio(self, parsed_page) -> IndicatorResult:
         """
         X3 — نسبت ارجاع به منابع معتبر.
-        فرمول: min(authoritative_outbound_links / total_outbound_links * 3, 1)
+        فرمول: min(authoritative_outbound_links / total_outbound_links * N, 1) با N از config/settings.yaml (پیش‌فرض ۳)
         """
         outbound_links = [link for link in parsed_page.all_links
                            if link["href"].startswith("http")]
@@ -102,7 +103,7 @@ class ExpertiseExtractor(BaseExtractor):
 
         authoritative_count = sum(1 for link in outbound_links if is_authoritative_domain(link["href"]))
         ratio = authoritative_count / len(outbound_links)
-        score = min(ratio * 3, 1.0)
+        score = min(ratio * get_threshold("x3_authoritative_ratio_multiplier"), 1.0)
         return IndicatorResult(code="X3", value=score, raw_details={
             "authoritative_count": authoritative_count,
             "total_outbound_links": len(outbound_links),
@@ -123,17 +124,19 @@ class ExpertiseExtractor(BaseExtractor):
 
         sentences, sentence_method = tokenize_sentences(text)
 
-        length_score = min(word_count / 1500, 1.0)
+        length_score = min(word_count / get_threshold("x4_word_count_for_full_score"), 1.0)
 
         if sentences:
             avg_sentence_length = word_count / len(sentences)
         else:
             avg_sentence_length = 0
-        readability_score = 1 - min(avg_sentence_length / 40, 1.0)
+        sentence_length_cap = get_threshold("x4_avg_sentence_length_cap")
+        readability_score = 1 - min(avg_sentence_length / sentence_length_cap, 1.0)
 
         structure_score = self._score_heading_structure(parsed_page.headings)
 
-        ttr_score = self._compute_ttr(words[:500])
+        ttr_window = get_threshold("x4_ttr_window_words")
+        ttr_score = self._compute_ttr(words[:ttr_window])
 
         x4 = (0.3 * length_score + 0.25 * readability_score
               + 0.2 * structure_score + 0.25 * ttr_score)

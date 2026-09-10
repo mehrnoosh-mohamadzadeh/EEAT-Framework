@@ -8,6 +8,7 @@ import re
 
 from extractors.base import BaseExtractor, IndicatorResult
 from utils.text_utils import tokenize_words
+from utils.settings_loader import get_threshold
 
 
 # الگوی E1: عدد + "سال" + فعل/اسم تجربه‌محور در فاصله نزدیک
@@ -150,7 +151,7 @@ class ExperienceExtractor(BaseExtractor):
     def _e2_first_person_density(self, parsed_page) -> IndicatorResult:
         """
         E2 — تراکم زبان تجربه‌محور (اول‌شخص).
-        فرمول: min(count / word_count * 1000 / K, 1)   با K=15
+        فرمول: min(count / word_count * 1000 / K, 1)   با K از config/settings.yaml (پیش‌فرض ۱۵)
 
         نکته: طبق نسخه ۳، این شاخص فقط برای صفحات مقاله فعال است؛
         برای صفحات محصول applicable=False برمی‌گرداند.
@@ -171,7 +172,7 @@ class ExperienceExtractor(BaseExtractor):
             return IndicatorResult(code="E2", value=0.0)
 
         matches = len(FIRST_PERSON_REGEX.findall(text))
-        K = 15  # قابل بازتنظیم تجربی — رجوع کنید به config/settings.yaml
+        K = get_threshold("e2_first_person_per_1000_words")  # مرجع: config/settings.yaml
         score = min((matches / word_count * 1000) / K, 1.0)
         return IndicatorResult(code="E2", value=score,
                                 raw_details={"matches": matches, "word_count": word_count,
@@ -180,7 +181,7 @@ class ExperienceExtractor(BaseExtractor):
     def _e3_user_reviews(self, parsed_page) -> IndicatorResult:
         """
         E3 — وجود و کیفیت نظرات کاربران.
-        فرمول: 0 اگر schema نباشد، وگرنه min(review_count / 10, 1)
+        فرمول: 0 اگر schema نباشد، وگرنه min(review_count / N, 1) با N از config/settings.yaml (پیش‌فرض ۱۰)
         """
         review_count = 0
         has_review_schema = False
@@ -273,7 +274,7 @@ class ExperienceExtractor(BaseExtractor):
                 "structural_signal": False,
             })
 
-        score = min(review_count / 10, 1.0)
+        score = min(review_count / get_threshold("e3_review_count_for_full_score"), 1.0)
 
         # شفافیت: اگر schema ادعای نظر دارد ولی هیچ نشونه‌ی بصری/ساختاری
         # نظر در صفحه نیست، این تناقض مستند می‌شود — ممکن است سایت یک
@@ -295,7 +296,7 @@ class ExperienceExtractor(BaseExtractor):
     def _e4_original_images(self, parsed_page) -> IndicatorResult:
         """
         E4 — تصاویر اختصاصی داخل محتوا.
-        فرمول: min(qualified_images / 3, 1)
+        فرمول: min(qualified_images / N, 1) با N از config/settings.yaml (پیش‌فرض ۳)
 
         نکته: شمارش فقط روی تصاویر داخل main_content_soup انجام می‌شود
         (نه تصاویر هدر/فوتر/سایدبار/تبلیغات).
@@ -308,7 +309,7 @@ class ExperienceExtractor(BaseExtractor):
             if alt and not any(generic in alt for generic in GENERIC_ALT_PATTERNS if generic):
                 qualified += 1
 
-        score = min(qualified / 3, 1.0)
+        score = min(qualified / get_threshold("e4_qualified_images_for_full_score"), 1.0)
         return IndicatorResult(code="E4", value=score,
                                 raw_details={"qualified_images": qualified,
                                              "total_images_in_content": len(images_in_main_content)})

@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from extractors.base import BaseExtractor, IndicatorResult
 from utils.persian_dates import find_jalali_date_in_text, jalali_to_gregorian, days_since
 from utils.linked_page import fetch_linked_page_text, fetch_linked_page
+from utils.settings_loader import get_threshold
 
 
 PRIVACY_LINK_PATTERNS = ["privacy", "حریم-خصوصی", "حریم_خصوصی", "سیاست-حفظ-حریم"]
@@ -95,7 +96,7 @@ class TrustExtractor(BaseExtractor):
     def _t3_privacy_policy(self, parsed_page) -> IndicatorResult:
         """
         T3 — وجود و کیفیت Privacy Policy.
-        فرمول: 0 اگر نباشد، وگرنه min(word_count_of_linked_page / 300, 1)
+        فرمول: 0 اگر نباشد، وگرنه min(word_count_of_linked_page / N, 1) با N از config/settings.yaml (پیش‌فرض ۳۰۰)
 
         این نسخه لینک را واقعاً دنبال می‌کند و طول واقعی صفحه‌ی مقصد
         را می‌سنجد. اگر دنبال‌کردن لینک شکست بخورد، امتیاز ثابت ۰.۵
@@ -112,7 +113,7 @@ class TrustExtractor(BaseExtractor):
             })
 
         word_count = len(linked_text.split())
-        score = min(word_count / 300, 1.0)
+        score = min(word_count / get_threshold("t3_privacy_word_count_for_full_score"), 1.0)
         return IndicatorResult(code="T3", value=score, raw_details={
             "linked_page_word_count": word_count,
         })
@@ -197,7 +198,7 @@ class TrustExtractor(BaseExtractor):
     def _t6_content_freshness(self, parsed_page) -> IndicatorResult:
         """
         T6 — تازگی محتوا (با پشتیبانی تقویم شمسی).
-        فرمول: max(0, 1 - (days_since_update / 730))
+        فرمول: max(0, 1 - (days_since_update / N))   با N از config/settings.yaml (پیش‌فرض ۷۳۰)
 
         اگر هیچ تاریخی یافت نشود، is_missing=True برگردانده می‌شود
         (نه صفر) — طبق مدیریت داده گمشده در نسخه ۳ فرهنگ شاخص‌ها.
@@ -224,7 +225,7 @@ class TrustExtractor(BaseExtractor):
 
         gregorian_date = jalali_to_gregorian(jalali_date)
         elapsed_days = days_since(gregorian_date)
-        score = max(0.0, 1 - (elapsed_days / 730))
+        score = max(0.0, 1 - (elapsed_days / get_threshold("t6_freshness_days_cap")))
         return IndicatorResult(code="T6", value=score,
                                 raw_details={"days_since_update": elapsed_days})
 
