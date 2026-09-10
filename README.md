@@ -15,7 +15,7 @@ URL ورودی
 [Parser]       -> تبدیل HTML به ساختار DOM قابل پردازش
   |
   v
-[Extractors]   -> استخراج ۱۶ شاخص در ۴ دسته (Experience, Expertise, Authority, Trust)
+[Extractors]   -> استخراج ۱۹ شاخص در ۴ دسته (Experience, Expertise, Authority, Trust)
   |
   v
 [Normalizer]   -> نرمال‌سازی شاخص‌ها به بازه [۰,۱]
