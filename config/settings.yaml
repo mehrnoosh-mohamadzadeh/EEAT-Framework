@@ -9,6 +9,7 @@ fetcher:
 # "فرض اولیه، قابل بازتنظیم تجربی در فاز ارزیابی" هستند.
 thresholds:
   e2_first_person_per_1000_words: 15      # K در فرمول E2
+  e2_min_word_count_for_scoring: 30       # زیر این تعداد کلمه، E2 نامعتبر (is_missing) است — رجوع به یافته‌های فاز رفع باگ
   e4_qualified_images_for_full_score: 3
   x3_authoritative_ratio_multiplier: 3
   x4_word_count_for_full_score: 1500

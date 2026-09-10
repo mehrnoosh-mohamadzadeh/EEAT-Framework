@@ -14,6 +14,15 @@ from utils.settings_loader import get_threshold
 
 BIO_LINK_PATTERNS = ["درباره-نویسنده", "درباره_نویسنده", "author", "نویسنده:"]
 
+# عناصر HTML که معمولاً «امضای نویسنده» را نگه می‌دارند (نه کل مقاله)
+# مرجع: مشاهده عملی در قالب‌های خبری/وبلاگی فارسی — 🔵 تصمیم طراحی
+AUTHOR_AREA_ATTR_PATTERN = re.compile(r"author|byline|نویسنده|vcard", re.IGNORECASE)
+
+# تعداد کلمه‌ی ابتدا/انتهای متن که به‌عنوان fallback ناحیه بایلاین
+# در نظر گرفته می‌شود، وقتی هیچ نشانه ساختاری (schema/class/id/لینک)
+# پیدا نشد — چون در بسیاری از قالب‌ها بایلاین همان‌جاست
+AUTHOR_AREA_FALLBACK_WORD_COUNT = 50
+
 # واژه‌نامه عناوین تخصصی فارسی — مرجع: feature_dictionary_v3.md, X1
 GENERAL_TITLES = ["کارشناس", "متخصص"]
 SPECIALIZED_TITLES = ["دکتر", "مهندس", "استاد", "کارشناس ارشد", "فوق تخصص", "phd", "پی‌اچ‌دی"]
@@ -39,13 +48,66 @@ class ExpertiseExtractor(BaseExtractor):
         """
         X1 — شواهد صلاحیت و هویت حرفه‌ای نویسنده.
         فرمول: 0.4 * bio_score + 0.6 * title_score
+
+        رفع باگ: title_score قبلاً کل متن صفحه را برای عناوین تخصصی
+        (مثل «دکتر») می‌گشت، پس مقاله‌ای که فقط *موضوعش* پزشکان بود
+        (بدون این‌که نویسنده‌اش مشخص باشد) هم امتیاز می‌گرفت. حالا این
+        جستجو فقط در ناحیه‌ی محتمل «امضای نویسنده» انجام می‌شود.
         """
         has_bio = self._has_author_bio(parsed_page)
-        title_score = self._detect_title_score(parsed_page.main_content_text)
+        author_area_text = self._extract_author_area_text(parsed_page)
+        title_score = self._detect_title_score(author_area_text)
 
         score = 0.4 * (1.0 if has_bio else 0.0) + 0.6 * title_score
         return IndicatorResult(code="X1", value=score,
-                                raw_details={"has_bio": has_bio, "title_score": title_score})
+                                raw_details={"has_bio": has_bio, "title_score": title_score,
+                                             "author_area_text_length": len(author_area_text)})
+
+    def _extract_author_area_text(self, parsed_page) -> str:
+        """
+        استخراج متنی که احتمالاً «امضای نویسنده» است، نه کل بدنه مقاله.
+        اولویت با نشانه‌های ساختاری قوی‌تر است؛ نتایج همه منابع با هم
+        ترکیب می‌شوند (نه فقط اولین مورد یافت‌شده):
+
+          ۱. فیلد author در JSON-LD (اگر به‌صورت نام متنی باشد)
+          ۲. عناصر HTML با class/id حاوی author/byline/نویسنده/vcard
+          ۳. متن لینک‌های «درباره نویسنده» + متن والدشان (برچسب کنار آیکون)
+          ۴. fallback: فقط ابتدا/انتهای main_content_text (نه کل آن) —
+             چون در نبود هر نشانه ساختاری، بایلاین معمولاً همان‌جاست
+        """
+        parts = []
+
+        for block in parsed_page.json_ld_blocks:
+            if isinstance(block, dict):
+                author_field = block.get("author")
+                if isinstance(author_field, dict):
+                    name = author_field.get("name")
+                    if isinstance(name, str):
+                        parts.append(name)
+                elif isinstance(author_field, str):
+                    parts.append(author_field)
+
+        for tag in parsed_page.soup.find_all(attrs={"class": AUTHOR_AREA_ATTR_PATTERN}):
+            parts.append(tag.get_text(separator=" ", strip=True))
+        for tag in parsed_page.soup.find_all(attrs={"id": AUTHOR_AREA_ATTR_PATTERN}):
+            parts.append(tag.get_text(separator=" ", strip=True))
+
+        for link in parsed_page.all_links:
+            href = link["href"].lower()
+            text = link["text"].lower()
+            if any(p in href or p in text for p in BIO_LINK_PATTERNS):
+                parts.append(link["text"])
+                if link.get("parent_text"):
+                    parts.append(link["parent_text"])
+
+        if not parts:
+            words, _ = tokenize_words(parsed_page.main_content_text)
+            if words:
+                n = AUTHOR_AREA_FALLBACK_WORD_COUNT
+                parts.append(" ".join(words[:n]))
+                parts.append(" ".join(words[-n:]))
+
+        return " ".join(parts)
 
     def _has_author_bio(self, parsed_page) -> bool:
         # بررسی وجود schema.org Person

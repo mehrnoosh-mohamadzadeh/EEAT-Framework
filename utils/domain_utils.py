@@ -13,24 +13,35 @@ import re
 from urllib.parse import urlparse
 
 
-# دامنه‌های معتبر برای شاخص X3 (نسبت ارجاع به منابع معتبر)
-# مرجع: feature_dictionary_v3.md, X3
-# دو نوع نگاشت: پسوندهای عمومی (endswith) و میزبان‌های دقیق شناخته‌شده
-AUTHORITATIVE_SUFFIXES = ["ac.ir", "gov.ir", "edu", "gov"]
-AUTHORITATIVE_EXACT_HOSTS = ["doi.org", "ncbi.nlm.nih.gov"]
-
-# نگاشت پسوند دامنه به امتیاز A1
-# مرجع: feature_dictionary_v3.md, A1 — بر پایه سیاست ثبت IRNIC
+# نگاشت پسوند دامنه به امتیاز A1 — همچنین منبع واحد پسوندهای معتبر برای X3
+# مرجع: feature_dictionary_v3.md, A1 — بر پایه سیاست ثبت IRNIC، بعلاوه
+# .edu/.gov (پسوندهای محدودشده و غیرقابل‌ثبت‌آزاد، هم‌تراز .ac.ir/.gov.ir)
 # ترتیب از خاص به عام مهم است چون تشخیص بر اساس طولانی‌ترین تطابق انجام می‌شود
+#
+# رفع باگ: قبلاً "edu"/"gov" فقط در AUTHORITATIVE_SUFFIXES (برای X3) بودند
+# و در این جدول (برای A1) نبودند؛ نتیجه‌اش این بود که harvard.edu در A1
+# به DEFAULT_DOMAIN_SCORE=0.2 می‌افتاد، پایین‌تر از یک .com معمولی (0.4).
+# دو جدول دامنه‌ی پروژه با هم نمی‌خواندند. حالا یک جدول واحد وجود دارد.
 IRNIC_DOMAIN_SCORES = {
     "ac.ir": 1.0,
     "gov.ir": 1.0,
+    "edu": 1.0,     # 🔵 تصمیم طراحی: هم‌تراز ac.ir/gov.ir چون edu هم پسوندی محدود و غیرقابل‌ثبت‌آزاد است
+    "gov": 1.0,     # 🔵 همان استدلال بالا
     "org.ir": 0.7,
     "co.ir": 0.7,
     "ir": 0.4,      # دامنه عمومی .ir
     "com": 0.4,
 }
 DEFAULT_DOMAIN_SCORE = 0.2
+
+# دامنه‌های معتبر برای شاخص X3 (نسبت ارجاع به منابع معتبر)
+# مرجع: feature_dictionary_v3.md, X3
+# پسوندهای عمومی اکنون مستقیماً از بالاترین ردیف IRNIC_DOMAIN_SCORES مشتق
+# می‌شوند (نه یک لیست جدا) تا A1 و X3 هرگز دوباره درباره‌ی یک پسوند
+# ناهمخوان نشوند. میزبان‌های دقیق (doi.org و مشابه) مکانیزم دیگری‌اند
+# (تطابق دقیق نام میزبان، نه پسوند) و همچنان جدا مدیریت می‌شوند.
+AUTHORITATIVE_SUFFIXES = [suffix for suffix, score in IRNIC_DOMAIN_SCORES.items() if score >= 1.0]
+AUTHORITATIVE_EXACT_HOSTS = ["doi.org", "ncbi.nlm.nih.gov"]
 
 
 def _extract_hostname(url: str) -> str:

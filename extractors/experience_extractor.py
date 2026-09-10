@@ -168,8 +168,16 @@ class ExperienceExtractor(BaseExtractor):
         text = parsed_page.main_content_text
         words, tokenize_method = tokenize_words(text)
         word_count = len(words)
-        if word_count == 0:
-            return IndicatorResult(code="E2", value=0.0)
+
+        min_words = get_threshold("e2_min_word_count_for_scoring")
+        if word_count < min_words:
+            # رفع باگ: قبلاً فقط word_count == 0 رد می‌شد، پس یک صفحه‌ی
+            # ۶ کلمه‌ای با یک «من» امتیاز کامل می‌گرفت (نسبت غیرقابل‌اتکا
+            # روی نمونه‌ی خیلی کوچک). متن به این کوتاهی برای سنجش تراکم
+            # قابل‌اتکا نیست، پس is_missing است، نه صفر یا امتیاز کامل.
+            return IndicatorResult(code="E2", value=None, is_missing=True,
+                                    raw_details={"reason": "not_enough_text_for_reliable_density",
+                                                 "word_count": word_count, "min_required": min_words})
 
         matches = len(FIRST_PERSON_REGEX.findall(text))
         K = get_threshold("e2_first_person_per_1000_words")  # مرجع: config/settings.yaml

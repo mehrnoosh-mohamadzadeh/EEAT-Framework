@@ -38,6 +38,45 @@ WHATSAPP_LINK_PATTERN = re.compile(r"wa\.me/|api\.whatsapp\.com|whatsapp\.com/se
 
 AD_CLASS_ID_PATTERN = re.compile(r"\b(ad|ads|advert|banner|sponsor)\b", re.IGNORECASE)
 
+# منابع شناخته‌شده‌ی iframe غیرتبلیغاتی (ویدیو/نقشه) — برای T5
+# مرجع: یافته عملی حین رفع باگ؛ 🔵 تصمیم طراحی (لیست کامل نیست)
+NON_AD_IFRAME_SRC_PATTERNS = [
+    "youtube.com", "youtube-nocookie.com", "youtu.be",
+    "aparat.com", "vimeo.com", "dailymotion.com",
+    "google.com/maps", "maps.google.com",
+]
+
+# دامنه‌های شناخته‌شده‌ی شبکه‌های تبلیغاتی — برای تشخیص مثبت‌محور (نه
+# فقط منفی‌محور بر پایه‌ی نام کلاس CSS، که شبکه‌های تبلیغاتی عمداً
+# مبهم/رندوم می‌کنند). استفاده در دو جا: (۱) src یک iframe، (۲) src
+# یک تگ <script> — چون خیلی از تبلیغات با اسکریپت لودر تزریق می‌شوند و
+# ممکن است خودِ iframe در HTML خام دیده نشود ولی اسکریپت لودرش باشد.
+#
+# 🟢 دامنه‌های گوگل/شرکت‌های تبلیغاتی جهانی بزرگ: از مستندات رسمی و
+# شناخته‌شده‌ی صنعت تایید شدند.
+# 🔵 yektanet.com و tapsell.ir: تایید شد که این دو، دو پلتفرم بزرگ
+# تبلیغات آنلاین ایرانی هستند (جست‌وجوی مستقل)، ولی زیردامنه‌ی دقیق
+# اسکریپت تبلیغ هرکدام به‌طور مستقل تایید نشد — یعنی ممکن است اگر
+# اسکریپت واقعی از یک زیردامنه‌ی کاملاً متفاوت سرو شود، این تشخیص ندهد
+# (false negative). این لیست کامل نیست و باید در فاز اعتبارسنجی
+# (روی نمونه صفحات واقعی فارسی) گسترش/تصحیح شود.
+KNOWN_AD_NETWORK_DOMAINS = [
+    "googlesyndication.com",   # Google AdSense
+    "doubleclick.net",         # Google Ad Manager
+    "googletagservices.com",   # Google Publisher Tag (GPT)
+    "googleadservices.com",
+    "adnxs.com",               # Xandr / AppNexus
+    "criteo.com",
+    "taboola.com",
+    "outbrain.com",
+    "media.net",
+    "amazon-adsystem.com",
+    "pubmatic.com",
+    "rubiconproject.com",
+    "yektanet.com",
+    "tapsell.ir",
+]
+
 STRUCTURED_DATA_TYPES_EXPECTED = ["Article", "Person", "Organization"]
 
 
@@ -178,6 +217,17 @@ class TrustExtractor(BaseExtractor):
         """
         T5 — تراکم تبلیغات (Heuristic — نه تشخیص قطعی).
         فرمول: 1 - min(ad_elements / content_blocks, 1)
+
+        بهبود نسبت به نسخه‌ی قبل: علاوه بر iframe و کلاس/id مشکوک،
+        حالا حضور اسکریپت لودر شبکه‌های تبلیغاتی شناخته‌شده هم بررسی
+        می‌شود (KNOWN_AD_NETWORK_DOMAINS) — چون بسیاری از تبلیغات با
+        جاوااسکریپت بعد از لود صفحه تزریق می‌شوند و در HTML خام فقط
+        خودِ اسکریپت لودر دیده می‌شود، نه iframe نهایی.
+
+        ⚠️ محدودیت پابرجا (رفع‌نشدنی با تحلیل HTML ایستا): تبلیغاتی که
+        هم منبعشان ناشناخته است هم کلاس/idشان مبهم‌سازی‌شده و هم فقط
+        بعد از اسکرول/تعامل کاربر با یک درخواست شبکه‌ی جداگانه بارگذاری
+        می‌شوند، همچنان قابل‌تشخیص نیستند.
         """
         all_blocks = parsed_page.soup.find_all(["div", "section", "aside"])
         if not all_blocks:
@@ -188,26 +238,81 @@ class TrustExtractor(BaseExtractor):
             class_and_id = " ".join(tag.get("class", []) or []) + " " + (tag.get("id", "") or "")
             if AD_CLASS_ID_PATTERN.search(class_and_id):
                 ad_elements += 1
-        ad_elements += len(parsed_page.soup.find_all("iframe"))
+
+        ad_iframe_count = sum(
+            1 for iframe in parsed_page.soup.find_all("iframe") if self._is_ad_iframe(iframe)
+        )
+        ad_elements += ad_iframe_count
+
+        ad_network_scripts = self._detect_ad_network_scripts(parsed_page.soup)
+        ad_elements += len(ad_network_scripts)
 
         ratio = ad_elements / len(all_blocks)
         score = 1 - min(ratio, 1.0)
-        return IndicatorResult(code="T5", value=score,
-                                raw_details={"ad_elements": ad_elements, "total_blocks": len(all_blocks)})
+        return IndicatorResult(code="T5", value=score, raw_details={
+            "ad_elements": ad_elements,
+            "ad_iframe_count": ad_iframe_count,
+            "ad_network_scripts_detected": sorted(ad_network_scripts),
+            "total_blocks": len(all_blocks),
+        })
+
+    def _is_ad_iframe(self, iframe_tag) -> bool:
+        """
+        تشخیص iframe تبلیغاتی از iframe غیرتبلیغاتی (عمدتاً ویدیو/نقشه).
+        اگر src به یکی از پلتفرم‌های شناخته‌شده‌ی NON_AD_IFRAME_SRC_PATTERNS
+        اشاره کند، تبلیغ حساب نمی‌شود. در غیر این صورت (منبع ناشناخته یا
+        صریحاً با کلاس/id تبلیغاتی، یا صریحاً یک دامنه‌ی تبلیغاتی شناخته‌شده)
+        — طبق محدودیت مستندشده در feature_dictionary_v3.md برای T5 («بسیاری
+        از تبلیغات کلاس CSS سفارشی دارند») — محافظه‌کارانه همچنان تبلیغ
+        فرض می‌شود.
+        """
+        src = (iframe_tag.get("src") or "").lower()
+        if any(domain in src for domain in NON_AD_IFRAME_SRC_PATTERNS):
+            return False
+        return True
+
+    @staticmethod
+    def _detect_ad_network_scripts(soup) -> set:
+        """
+        بررسی همه‌ی تگ‌های <script src="..."> صفحه (نه فقط main content،
+        چون این‌ها معمولاً در <head> هستند) برای یافتن اسکریپت لودر یکی
+        از شبکه‌های تبلیغاتی شناخته‌شده در KNOWN_AD_NETWORK_DOMAINS.
+        برمی‌گرداند: مجموعه‌ی دامنه‌های منحصربه‌فرد یافت‌شده (نه تعداد
+        تگ، تا اسکریپت تکراری از یک شبکه دوبار شمرده نشود).
+        """
+        found = set()
+        for script_tag in soup.find_all("script", src=True):
+            src = script_tag.get("src", "").lower()
+            for domain in KNOWN_AD_NETWORK_DOMAINS:
+                if domain in src:
+                    found.add(domain)
+        return found
 
     def _t6_content_freshness(self, parsed_page) -> IndicatorResult:
         """
         T6 — تازگی محتوا (با پشتیبانی تقویم شمسی).
-        فرمول: max(0, 1 - (days_since_update / N))   با N از config/settings.yaml (پیش‌فرض ۷۳۰)
+        فرمول: max(0, min(1, 1 - (days_since_update / N)))   با N از config/settings.yaml (پیش‌فرض ۷۳۰)
 
         اگر هیچ تاریخی یافت نشود، is_missing=True برگردانده می‌شود
         (نه صفر) — طبق مدیریت داده گمشده در نسخه ۳ فرهنگ شاخص‌ها.
         """
+        freshness_cap = get_threshold("t6_freshness_days_cap")
+
         # اول تلاش برای یافتن تاریخ در JSON-LD (schema.org dateModified/datePublished)
         schema_date_str = self._find_schema_date(parsed_page.json_ld_blocks)
         if schema_date_str:
-            # TODO: پارس تاریخ میلادی ISO 8601 با datetime.fromisoformat
-            pass
+            parsed_date = self._parse_iso_date(schema_date_str)
+            if parsed_date is not None:
+                elapsed_days = days_since(parsed_date)
+                score = self._freshness_score(elapsed_days, freshness_cap)
+                return IndicatorResult(code="T6", value=score, raw_details={
+                    "source": "schema_json_ld",
+                    "raw_date": schema_date_str,
+                    "days_since_update": elapsed_days,
+                })
+            # اگر schema تاریخ داشت ولی فرمتش ISO 8601 قابل‌پارس نبود
+            # (مثلاً یک رشته غیراستاندارد)، به fallback زیر سقوط می‌کنیم
+            # به‌جای این‌که کل شاخص را از دست بدهیم
 
         # سپس جستجوی تاریخ شمسی در کل متن صفحه
         full_text = parsed_page.soup.get_text(separator=" ", strip=True)
@@ -225,9 +330,47 @@ class TrustExtractor(BaseExtractor):
 
         gregorian_date = jalali_to_gregorian(jalali_date)
         elapsed_days = days_since(gregorian_date)
-        score = max(0.0, 1 - (elapsed_days / get_threshold("t6_freshness_days_cap")))
-        return IndicatorResult(code="T6", value=score,
-                                raw_details={"days_since_update": elapsed_days})
+        score = self._freshness_score(elapsed_days, freshness_cap)
+        return IndicatorResult(code="T6", value=score, raw_details={
+            "source": "jalali_text_search",
+            "days_since_update": elapsed_days,
+        })
+
+    @staticmethod
+    def _parse_iso_date(date_str: str):
+        """
+        پارس یک رشته تاریخ ISO 8601 (خروجی معمول dateModified/datePublished
+        در schema.org، مثل "2024-05-12" یا "2024-05-12T10:00:00Z" یا
+        "2024-05-12T10:00:00+03:30") به شیء datetime.date.
+
+        اگر پارس ناموفق بود None برمی‌گرداند (نه Exception) تا فراخوان
+        بتواند به fallback بعدی (جستجوی تاریخ شمسی در متن) سقوط کند —
+        یک تاریخ schema با فرمت غیرمنتظره نباید کل شاخص T6 را از بین ببرد.
+        """
+        import datetime
+
+        if not isinstance(date_str, str) or not date_str.strip():
+            return None
+
+        normalized = date_str.strip().replace("Z", "+00:00")
+        try:
+            return datetime.datetime.fromisoformat(normalized).date()
+        except ValueError:
+            pass
+
+        try:
+            return datetime.date.fromisoformat(normalized[:10])
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _freshness_score(elapsed_days: int, cap: float) -> float:
+        """
+        نگاشت روزهای سپری‌شده به امتیاز [0,1]. تاریخ‌های آینده (schema
+        با تاریخ انتشار زمان‌بندی‌شده، یا اختلاف ساعت سرور) هم صریحاً
+        به سقف ۱ محدود می‌شوند تا هرگز عدد بالای ۱ برنگردد.
+        """
+        return max(0.0, min(1.0, 1 - (elapsed_days / cap)))
 
     def _find_schema_date(self, json_ld_blocks: list) -> str | None:
         for block in json_ld_blocks:
