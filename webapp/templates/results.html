@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}نتیجه بررسی — {{ url }}{% endblock %}
+{% block content %}
+
+<div class="report">
+  <a href="{{ url_for('index') }}" class="back-link">← بررسی صفحه دیگر</a>
+
+  <p class="eyebrow">گزارش ارزیابی</p>
+  <p class="report-url" title="{{ url }}">
+    <a href="{{ url }}" target="_blank" rel="noopener">{{ display_url }}</a>
+  </p>
+
+  <form action="{{ url_for('analyze') }}" method="post" class="quick-scan-form">
+    <input type="text" name="url" placeholder="آدرس صفحه دیگری را وارد کن" required>
+    <button type="submit">بررسی کن</button>
+  </form>
+
+  <div class="hero">
+    <div class="gauge" style="--percent: {{ final_score_percent }}">
+      <div class="gauge-inner">
+        <span class="gauge-number">{{ final_score_percent }}</span>
+        <span class="gauge-unit">از ۱۰۰</span>
+      </div>
+    </div>
+    <p class="gauge-label">امتیاز نهایی E-E-A-T</p>
+  </div>
+
+  <div class="component-grid">
+    {% for c in components %}
+    <div class="component-card status-{{ c.status }}">
+      <div class="component-head">
+        <span class="component-name">{{ c.label }}</span>
+        <span class="component-percent mono">
+          {% if c.score_percent is not none %}{{ c.score_percent }}٪{% else %}—{% endif %}
+        </span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill status-{{ c.status }}" style="width: {{ c.score_percent or 0 }}%"></div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <h2 class="checklist-title">جزئیات هر شاخص</h2>
+
+  {% for c in components %}
+  <div class="checklist-group">
+    <h3 class="checklist-group-title">{{ c.label }}</h3>
+    <div class="checklist">
+      {% for ind in c.indicators %}
+      <div class="check-row">
+        <span class="dot {{ ind.status }}"></span>
+        <span class="check-label">{{ ind.label }}</span>
+        <span class="check-code mono">{{ ind.code }}</span>
+        <span class="check-value mono">
+          {% if ind.status == 'not_applicable' %}غیرقابل‌اعمال
+          {% elif ind.status == 'missing' %}داده نامشخص
+          {% else %}{{ ind.value_percent }}٪
+          {% endif %}
+        </span>
+      </div>
+      {% if ind.evidence %}
+      <div class="check-evidence mono">{{ ind.evidence }}</div>
+      {% endif %}
+      {% if ind.tip %}
+      <div class="check-tip">
+        <span class="check-tip-arrow">↳</span> {{ ind.tip }}
+      </div>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+
+</div>
+
+{% endblock %}

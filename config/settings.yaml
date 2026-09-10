@@ -1,0 +1,22 @@
+# تنظیمات کلی پروژه
+
+fetcher:
+  timeout_seconds: 15
+  user_agent: "EEAT-Research-Framework/1.0 (academic thesis project)"
+  render_js: false   # اگر true باشد از Playwright استفاده می‌شود
+
+# آستانه‌های عددی شاخص‌ها — همه این مقادیر طبق فرهنگ شاخص‌ها نسخه ۳
+# "فرض اولیه، قابل بازتنظیم تجربی در فاز ارزیابی" هستند.
+thresholds:
+  e2_first_person_per_1000_words: 15      # K در فرمول E2
+  e4_qualified_images_for_full_score: 3
+  x3_authoritative_ratio_multiplier: 3
+  x4_word_count_for_full_score: 1500
+  x4_avg_sentence_length_cap: 40
+  x4_ttr_window_words: 500
+  e3_review_count_for_full_score: 10
+  t3_privacy_word_count_for_full_score: 300
+  t6_freshness_days_cap: 730
+
+# آستانه همبستگی برای ادغام شاخص‌های وابسته (طبق نسخه ۳ فرهنگ شاخص‌ها)
+correlation_merge_threshold: 0.8

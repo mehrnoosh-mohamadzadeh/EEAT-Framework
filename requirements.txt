@@ -1,0 +1,13 @@
+Flask
+requests
+playwright
+beautifulsoup4
+lxml
+hazm
+jdatetime
+pandas
+numpy
+scipy
+PyYAML
+python-dateutil
+pytest
