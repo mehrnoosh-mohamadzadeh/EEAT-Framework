@@ -17,16 +17,29 @@ from dataclasses import dataclass
 import requests
 from requests.exceptions import RequestException
 
+from utils.settings_loader import get_fetcher_setting
+
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
-DEFAULT_HEADERS = {
-    "User-Agent": DEFAULT_USER_AGENT,
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "fa,en-US;q=0.9,en;q=0.8",
-}
+def _get_configured_user_agent() -> str:
+    """
+    خواندن user_agent از config/settings.yaml؛ اگر نبود یا فایل در
+    دسترس نبود، همان User-Agent واقعی کروم که همیشه پیش‌فرض این پروژه
+    بوده برمی‌گردد (رجوع به یافته‌ی مستندشده: نسخه‌ی رباتی باعث
+    مسدودشدن توسط بعضی سایت‌ها می‌شد).
+    """
+    return get_fetcher_setting("user_agent", DEFAULT_USER_AGENT)
+
+
+def _build_headers() -> dict:
+    return {
+        "User-Agent": _get_configured_user_agent(),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "fa,en-US;q=0.9,en;q=0.8",
+    }
 
 # اگر متن body اولیه HTML کمتر از این تعداد کاراکتر باشد، احتمالاً
 # صفحه با جاوااسکریپت رندر می‌شود و باید از Playwright استفاده شود.
@@ -49,11 +62,17 @@ class FetchResult:
         return self.error is None and 200 <= self.status_code < 300
 
 
-def fetch_simple(url: str, timeout: int = 25) -> FetchResult:
+def fetch_simple(url: str, timeout: int = None) -> FetchResult:
     """
     دانلود HTML با کتابخانه requests (بدون اجرای جاوااسکریپت).
+
+    timeout=None یعنی از config/settings.yaml (fetcher.timeout_seconds)
+    خوانده شود؛ رفع باگ: قبلاً این تابع همیشه ۲۵ ثانیه‌ی هاردکد را
+    استفاده می‌کرد، بدون توجه به مقدار ۱۵ ثانیه‌ی مستندشده در config.
     """
-    headers = DEFAULT_HEADERS
+    if timeout is None:
+        timeout = get_fetcher_setting("timeout_seconds", 25)
+    headers = _build_headers()
     start = time.monotonic()
     try:
         response = requests.get(url, headers=headers, timeout=timeout)
@@ -78,24 +97,97 @@ def fetch_simple(url: str, timeout: int = 25) -> FetchResult:
         )
 
 
-def fetch_rendered(url: str, timeout: int = 20) -> FetchResult:
+def fetch_rendered(url: str, timeout: int = None) -> FetchResult:
     """
     دانلود HTML با Playwright (برای صفحاتی که با JS رندر می‌شوند).
 
     نکته: playwright به‌صورت lazy import می‌شود چون یک وابستگی سنگین
     است و فقط وقتی واقعاً لازم باشد (render_js=True یا تشخیص خودکار)
     بارگذاری می‌شود.
+
+    timeout=None یعنی از config/settings.yaml (fetcher.timeout_seconds)
+    خوانده شود — رفع باگ: قبلاً این تابع همیشه ۲۰ ثانیه‌ی هاردکد را
+    استفاده می‌کرد، بدون توجه به مقدار ۱۵ ثانیه‌ی مستندشده در config.
+
+    استراتژی wait: رفع باگ — قبلاً page.goto() فقط با
+    wait_until="networkidle" صدا زده می‌شد. networkidle یعنی صبر تا
+    هیچ درخواست شبکه‌ای برای ۵۰۰ میلی‌ثانیه در جریان نباشد؛ خیلی از
+    سایت‌های واقعی (آنالیتیکس، تبلیغات، polling، وب‌سوکت) هرگز واقعاً
+    به این حالت نمی‌رسند، پس goto() تا سررسید کامل timeout (که همان
+    fetcher.timeout_seconds کل است) صبر می‌کرد و کل fetch شکست می‌خورد،
+    حتی اگر محتوای اصلی صفحه خیلی زودتر (مثلاً با DOMContentLoaded)
+    کامل رندر شده باشد. حالا ابتدا فقط تا "domcontentloaded" (سبک‌تر و
+    قابل‌اعتمادتر) صبر می‌شود، سپس یک تلاش جداگانه و با سقف کوتاه‌تر
+    برای رسیدن به networkidle انجام می‌شود؛ اگر این تلاش دوم هم به
+    سررسید بخورد، به‌جای شکست کل fetch، همان DOM فعلی (که معمولاً تا
+    این مرحله محتوای اصلی را دارد) گرفته و برگردانده می‌شود.
+
+    نکته‌ی دوم (تست شده با یک صفحه‌ی شبیه‌سازی‌شده که محتوا را با
+    setTimeout و بدون هیچ درخواست شبکه‌ای تزریق می‌کند): «networkidle»
+    فقط درخواست‌های شبکه را می‌بیند، نه اجرای کد جاوااسکریپت. اگر
+    محتوای اصلی صفحه با تایمر/state داخلی (نه یک درخواست شبکه‌ی جدید)
+    بعد از رندر اولیه ظاهر شود، ممکن است هیچ درخواست شبکه‌ای بعد از
+    domcontentloaded رخ ندهد و networkidle بلافاصله (خیلی زودتر از
+    ظاهرشدن محتوای واقعی) برآورده شود. برای همین، بعد از تلاش برای
+    networkidle، یک صبر محدود و اضافه هم انجام می‌شود تا متن قابل‌مشاهده
+    body به همان آستانه‌ای برسد که _looks_like_js_rendered برای «کافی
+    بودن محتوا» استفاده می‌کند — اگر تا سررسید این صبر اضافه هم به آن
+    نرسد، باز همان DOM فعلی (بهتر از هیچی) گرفته می‌شود، نه شکست کامل.
     """
     from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+
+    if timeout is None:
+        timeout = get_fetcher_setting("timeout_seconds", 20)
+
+    # سقف صبر جداگانه برای رسیدن به networkidle بعد از domcontentloaded؛
+    # حداکثر نیمی از کل timeout (و حداقل ۳ ثانیه) — عمداً محدود، تا
+    # صفحاتی که هیچ‌وقت واقعاً idle نمی‌شوند کل fetch را قفل نکنند.
+    idle_wait_ms = max(3000, int(timeout * 1000 / 2))
+
+    # سقف صبر «متن کافی» — عمداً ثابت و کوتاه (نه وابسته به idle_wait_ms).
+    # رفع باگ (پیدا شده حین تست با یک صفحه‌ی About Us واقعی و کوتاه):
+    # اگر این سقف را برابر idle_wait_ms می‌گذاشتیم، هر صفحه‌ی کوتاهِ
+    # واقعی (که هیچ‌وقت به آستانه‌ی ۲۰۰ کاراکتر نمی‌رسد چون واقعاً همین
+    # مقدار محتوا دارد) باید تا انتهای همان سقف طولانی صبر می‌کرد و
+    # fetch را چند ثانیه بی‌دلیل کند می‌کرد. این صبر فقط یک شبکه‌ی
+    # ایمنی برای مهلت‌دادن به تزریق محتوای JS (هیدریشن/state داخلی) است،
+    # نه یک انتظار اصلی — پس کوتاه نگه داشته می‌شود.
+    CONTENT_STABILITY_WAIT_MS = 2000
 
     start = time.monotonic()
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            page = browser.new_page(user_agent=DEFAULT_USER_AGENT)
-            page.goto(url, timeout=timeout * 1000, wait_until="networkidle")
-            html = page.content()
-            browser.close()
+            try:
+                page = browser.new_page(user_agent=_get_configured_user_agent())
+                page.goto(url, timeout=timeout * 1000, wait_until="domcontentloaded")
+                try:
+                    page.wait_for_load_state("networkidle", timeout=idle_wait_ms)
+                except PlaywrightTimeoutError:
+                    # صفحه هرگز کاملاً idle نشد (مثلاً به‌خاطر polling/
+                    # آنالیتیکس دائمی) — DOM فعلی معمولاً محتوای اصلی
+                    # را دارد، پس همین را استفاده می‌کنیم به‌جای شکست کامل
+                    pass
+                try:
+                    page.wait_for_function(
+                        "document.body && document.body.innerText "
+                        f"&& document.body.innerText.trim().length > {MIN_BODY_TEXT_LENGTH_FOR_SIMPLE_FETCH}",
+                        timeout=CONTENT_STABILITY_WAIT_MS,
+                    )
+                except PlaywrightTimeoutError:
+                    # محتوا هیچ‌وقت به آستانه‌ی «کافی» نرسید (یا صفحه
+                    # واقعاً همین‌قدر کم‌محتوا است) — همان DOM فعلی گرفته
+                    # می‌شود؛ تصمیم نهایی درباره‌ی کافی‌بودن محتوا به عهده‌ی
+                    # تحلیل بعدی (Parser/Extractors) است، نه این تابع
+                    pass
+                html = page.content()
+            finally:
+                # رفع باگ: قبلاً browser.close() فقط در مسیر موفق صدا
+                # زده می‌شد؛ اگر page.goto() timeout بدهد (محتمل روی
+                # سایت‌های خارجی با فیلترشکن)، مرورگر headless بسته
+                # نمی‌شد و در اجرای دسته‌ای روی چند ده URL، چندین
+                # پردازش کروم زامبی باز می‌ماند
+                browser.close()
         elapsed_ms = (time.monotonic() - start) * 1000
         return FetchResult(
             url=url,

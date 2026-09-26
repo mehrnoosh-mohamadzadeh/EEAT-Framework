@@ -55,6 +55,68 @@ def make_display_url(url: str, max_len: int = 70) -> str:
     return clean or url
 
 
+
+# نگاشت کلید فنی raw_details (که extractorها تولید می‌کنند) به برچسب
+# فارسی قابل‌نمایش. عمداً در سطح ماژول است (نه محلی داخل تابع) تا
+# tests/test_webapp.py بتواند آن را با کلیدهای واقعی extractorها
+# مقایسه کند — رفع باگ: این دیکشنری قبلاً از فازهای بعدی پروژه عقب
+# افتاده بود (حدود ۲۵ کلید جدید بدون برچسب فارسی اضافه شده بودند) و
+# هیچ‌چیزی این عقب‌افتادگی را خودکار تشخیص نمی‌داد.
+RAW_DETAILS_LABELS = {
+    # عمومی/چندشاخصی
+    "channels_found": "کانال‌های یافت‌شده",
+    "details_found": "جزئیات یافت‌شده",
+    "found_fields": "فیلدهای یافت‌شده",
+    "found_types": "انواع یافت‌شده",
+    "word_count": "تعداد کلمه",
+    "min_required": "حداقل لازم",
+    "matches": "تعداد تطابق",
+    "tokenize_method": "روش توکنایز",
+    # E1-E4 (Experience)
+    "has_experience_phrase": "عبارت صریح تجربه دارد؟",
+    "has_explicit_duration": "مدت‌زمان صریح تجربه ذکر شده؟",
+    "review_count": "تعداد نظر (طبق داده ساختاریافته)",
+    "qualified_images": "تعداد تصویر واجد شرایط",
+    "total_images_in_content": "تعداد کل تصاویر محتوا",
+    "text_signal": "نشانه متنی نظرات",
+    "structural_signal": "نشانه ساختاری نظرات",
+    "visible_signal_present": "نشانه بصری نظرات موجود است؟",
+    "wp_comment_form_present": "فرم ثبت نظر وردپرسی دارد؟",
+    # X1-X5 (Expertise)
+    "has_bio": "بیوگرافی نویسنده دارد؟",
+    "title_score": "امتیاز عنوان تخصصی",
+    "author_area_text_length": "طول متن ناحیه نویسنده (کاراکتر)",
+    "profile_links_found": "تعداد لینک پروفایل حرفه‌ای",
+    "authoritative_count": "تعداد لینک به دامنه معتبر",
+    "total_outbound_links": "تعداد کل لینک خروجی",
+    "avg_sentence_length": "میانگین طول جمله (کلمه)",
+    "structure_score": "امتیاز ساختار تیترها",
+    "ttr_score": "امتیاز تنوع واژگانی (TTR)",
+    "citation_context_count": "تعداد ارجاع معتبر با بافت متنی",
+    # A1-A3 (Authoritativeness)
+    "social_links_found": "تعداد لینک شبکه اجتماعی",
+    "about_page_fetched": "صفحه درباره‌ما دانلود شد؟",
+    # T1-T7 (Trustworthiness)
+    "issuer": "صادرکننده گواهی SSL",
+    "contact_page_fetched": "صفحه تماس دانلود شد؟",
+    "whatsapp_link_detected": "لینک واتساپ پیدا شد؟",
+    "tel_link_detected": "لینک تماس مستقیم (tel:) پیدا شد؟",
+    "mailto_link_detected": "لینک ایمیل مستقیم (mailto:) پیدا شد؟",
+    "linked_page_word_count": "تعداد کلمه صفحه لینک‌شده",
+    "ad_elements": "تعداد عنصر تبلیغاتی",
+    "ad_iframe_count": "تعداد iframe تبلیغاتی",
+    "ad_network_scripts_detected": "اسکریپت‌های شبکه تبلیغاتی شناسایی‌شده",
+    "total_blocks": "تعداد کل بلوک‌های صفحه",
+    "source": "منبع تاریخ",
+    "raw_date": "تاریخ خام یافت‌شده",
+    "estimated_date": "تاریخ تخمینی (از Wayback Machine)",
+    "days_since_update": "روز از آخرین به‌روزرسانی",
+}
+
+# کلیدهایی که عمداً برچسب نمی‌گیرند چون جدا/متفاوت نمایش داده می‌شوند
+RAW_DETAILS_KEYS_HANDLED_SEPARATELY = {"reason", "note"}
+
+
 def _format_evidence(raw_details: dict) -> str:
     """
     تبدیل دیکشنری raw_details هر شاخص به یک خط متن قابل‌فهم — برای
@@ -63,30 +125,11 @@ def _format_evidence(raw_details: dict) -> str:
     if not raw_details:
         return ""
 
-    labels = {
-        "channels_found": "کانال‌های یافت‌شده",
-        "details_found": "جزئیات یافت‌شده",
-        "found_fields": "فیلدهای یافت‌شده",
-        "found_types": "انواع یافت‌شده",
-        "review_count": "تعداد نظر (طبق داده ساختاریافته)",
-        "social_links_found": "تعداد لینک شبکه اجتماعی",
-        "qualified_images": "تعداد تصویر واجد شرایط",
-        "days_since_update": "روز از آخرین به‌روزرسانی",
-        "about_page_fetched": "صفحه درباره‌ما دانلود شد؟",
-        "contact_page_fetched": "صفحه تماس دانلود شد؟",
-        "whatsapp_link_detected": "لینک واتساپ پیدا شد؟",
-        "tel_link_detected": "لینک تماس مستقیم (tel:) پیدا شد؟",
-        "mailto_link_detected": "لینک ایمیل مستقیم (mailto:) پیدا شد؟",
-        "text_signal": "نشانه متنی نظرات",
-        "structural_signal": "نشانه ساختاری نظرات",
-        "visible_signal_present": "نشانه بصری نظرات موجود است؟",
-    }
-
     parts = []
     for key, value in raw_details.items():
-        if key in ("reason", "note"):
+        if key in RAW_DETAILS_KEYS_HANDLED_SEPARATELY:
             continue
-        label = labels.get(key, key)
+        label = RAW_DETAILS_LABELS.get(key, key)
         if isinstance(value, list):
             value_str = "، ".join(str(v) for v in value) if value else "هیچ‌کدام"
         elif isinstance(value, bool):

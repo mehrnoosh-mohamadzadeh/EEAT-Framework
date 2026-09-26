@@ -1,4 +1,13 @@
-url,category
-https://example.ac.ir/sample-article,high_quality
-https://example-blog.ir/sample-post,medium_quality
-https://example-low-quality.com/sample-page,low_quality
+url,category,verification,note
+https://behdasht.gov.ir/,expected_high,verified_via_search,دامنه رسمی وزارت بهداشت - یک مقاله سلامت واقعی (نه صفحه اصلی) از داخل سایت انتخاب کنید
+https://ut.ac.ir/,expected_high,verified_via_search,دامنه رسمی دانشگاه تهران (.ac.ir) - یک صفحه خبر/اطلاعیه واقعی انتخاب کنید
+https://irna.ir/,expected_high,verified_via_search,خبرگزاری رسمی جمهوری اسلامی ایران - یک خبر واقعی انتخاب کنید
+https://isna.ir/,expected_high_medium,verified_via_search,خبرگزاری دانشجویان ایران - یک خبر واقعی انتخاب کنید
+https://mehrnews.com/,expected_high_medium,verified_via_search,خبرگزاری مهر - یک خبر واقعی انتخاب کنید
+https://digikala.com/,expected_medium,verified_via_search,بزرگترین فروشگاه اینترنتی ایران - یک صفحه محصول با نظرات واقعی انتخاب کنید
+https://virgool.io/,expected_medium,verified_via_search,پلتفرم انتشار مقالات فارسی (شبیه Medium) - یک مقاله واقعی با نویسنده مشخص انتخاب کنید
+https://blogfa.com/,expected_medium_low,verified_via_search_as_platform_only,این خودِ پلتفرم وبلاگ‌دهی است نه یک وبلاگ خاص - باید خودتان یک زیردامنه‌ی فعال واقعی (مثل xyz.blogfa.com) پیدا و جایگزین کنید
+https://blog.ir/,expected_medium_low,verified_via_search_as_platform_only,مشابه بالا - پلتفرم است، باید یک زیردامنه‌ی فعال واقعی جایگزین شود
+https://aparat.com/,expected_medium,general_knowledge_not_individually_searched,پلتفرم ویدیوی فارسی - یک صفحه ویدیوی آموزشی/تخصصی واقعی انتخاب کنید
+https://tabnak.ir/,expected_medium,general_knowledge_not_individually_searched,سایت خبری-تحلیلی - یک مطلب واقعی انتخاب کنید
+https://hamshahrionline.ir/,expected_medium_high,general_knowledge_not_individually_searched,روزنامه همشهری آنلاین - یک مطلب واقعی انتخاب کنید

@@ -10,9 +10,16 @@ from extractors.base import BaseExtractor, IndicatorResult
 from utils.domain_utils import is_authoritative_domain
 from utils.text_utils import tokenize_words, tokenize_sentences
 from utils.settings_loader import get_threshold
+from utils.json_ld_utils import flatten_json_ld_blocks
 
 
-BIO_LINK_PATTERNS = ["درباره-نویسنده", "درباره_نویسنده", "author", "نویسنده:"]
+BIO_LINK_PATTERNS = ["نویسنده", "author"]
+# رفع باگ (همان کلاس باگ CONTACT_LINK_PATTERNS در trust_extractor.py):
+# نسخه‌ی قبل فقط عبارت دقیق «درباره-نویسنده»/«درباره_نویسنده» (با
+# خط‌تیره/زیرخط) را می‌پذیرفت که متن طبیعی لینک به‌ندرت این‌طور
+# نوشته می‌شود. حالا کلمه‌ی پایه («نویسنده») به‌تنهایی کافی است —
+# همان‌طور که «نویسنده:» قبلاً هم به‌تنهایی پذیرفته می‌شد، پس این
+# فقط آن را به یک الگوی واحد و ساده‌تر تبدیل می‌کند.
 
 # عناصر HTML که معمولاً «امضای نویسنده» را نگه می‌دارند (نه کل مقاله)
 # مرجع: مشاهده عملی در قالب‌های خبری/وبلاگی فارسی — 🔵 تصمیم طراحی
@@ -77,15 +84,14 @@ class ExpertiseExtractor(BaseExtractor):
         """
         parts = []
 
-        for block in parsed_page.json_ld_blocks:
-            if isinstance(block, dict):
-                author_field = block.get("author")
-                if isinstance(author_field, dict):
-                    name = author_field.get("name")
-                    if isinstance(name, str):
-                        parts.append(name)
-                elif isinstance(author_field, str):
-                    parts.append(author_field)
+        for block in flatten_json_ld_blocks(parsed_page.json_ld_blocks):
+            author_field = block.get("author")
+            if isinstance(author_field, dict):
+                name = author_field.get("name")
+                if isinstance(name, str):
+                    parts.append(name)
+            elif isinstance(author_field, str):
+                parts.append(author_field)
 
         for tag in parsed_page.soup.find_all(attrs={"class": AUTHOR_AREA_ATTR_PATTERN}):
             parts.append(tag.get_text(separator=" ", strip=True))
@@ -110,17 +116,16 @@ class ExpertiseExtractor(BaseExtractor):
         return " ".join(parts)
 
     def _has_author_bio(self, parsed_page) -> bool:
-        # بررسی وجود schema.org Person
-        for block in parsed_page.json_ld_blocks:
-            if isinstance(block, dict):
-                schema_type = block.get("@type", "")
-                type_list = schema_type if isinstance(schema_type, list) else [schema_type]
-                if "Person" in type_list:
-                    return True
-                # حالت رایج: author به‌عنوان فیلد تودرتو
-                author_field = block.get("author")
-                if isinstance(author_field, dict) and "Person" in str(author_field.get("@type", "")):
-                    return True
+        # بررسی وجود schema.org Person (پس از باز کردن @graph در صورت وجود)
+        for block in flatten_json_ld_blocks(parsed_page.json_ld_blocks):
+            schema_type = block.get("@type", "")
+            type_list = schema_type if isinstance(schema_type, list) else [schema_type]
+            if "Person" in type_list:
+                return True
+            # حالت رایج: author به‌عنوان فیلد تودرتو
+            author_field = block.get("author")
+            if isinstance(author_field, dict) and "Person" in str(author_field.get("@type", "")):
+                return True
 
         # بررسی لینک/متن «درباره نویسنده»
         for link in parsed_page.all_links:
@@ -234,12 +239,21 @@ class ExpertiseExtractor(BaseExtractor):
         X5 — کیفیت زمینه ارجاع (Citation Context).
         فرمول: citation_context_links / total_outbound_links
 
-        تصحیح مهم: قبلاً فقط متن لینک («طبق مقاله...») بررسی می‌شد،
+        تصحیح مهم (دور اول): قبلاً فقط متن لینک («طبق مقاله...») بررسی می‌شد،
         بدون توجه به این‌که مقصد لینک واقعاً معتبر است یا نه — یعنی
         نوشتن «طبق منبع معتبر» با لینک به یک سایت تصادفی هم امتیاز
         می‌گرفت. حالا یک لینک فقط وقتی «ارجاع معتبر» حساب می‌شود که
         هر دو شرط را داشته باشد: هم بافت متنی ارجاعی، هم مقصد واقعاً
         یک دامنه معتبر (طبق is_authoritative_domain در X3).
+
+        رفع باگ (دور دوم): کلمه‌ی زمینه‌ساز («طبق»، «بر اساس») در جمله‌ی
+        طبیعی فارسی معمولاً بیرون از خودِ تگ لینک است — مثل
+        «طبق <a>این گزارش</a>» — نه داخل متن قابل‌کلیک. قبلاً فقط
+        link["text"] (متن داخل تگ) چک می‌شد، پس این ساختار طبیعی‌ترین
+        جمله‌ی فارسی را اصلاً تشخیص نمی‌داد. حالا parent_text (متن کل
+        عنصر والد، شامل متن قبل/بعد از لینک) هم بررسی می‌شود — دقیقاً
+        همان الگویی که در A3/T4 برای پیدا کردن لینک از قبل استفاده
+        می‌شد، ولی این‌جا اعمال نشده بود.
         """
         outbound_links = [link for link in parsed_page.all_links
                            if link["href"].startswith("http")]
@@ -249,7 +263,8 @@ class ExpertiseExtractor(BaseExtractor):
 
         citation_context_count = sum(
             1 for link in outbound_links
-            if any(marker in link["text"] for marker in CITATION_CONTEXT_MARKERS)
+            if any(marker in link["text"] or marker in link.get("parent_text", "")
+                   for marker in CITATION_CONTEXT_MARKERS)
             and is_authoritative_domain(link["href"])
         )
         score = citation_context_count / len(outbound_links)

@@ -9,6 +9,8 @@ import re
 from extractors.base import BaseExtractor, IndicatorResult
 from utils.text_utils import tokenize_words
 from utils.settings_loader import get_threshold
+from utils.json_ld_utils import flatten_json_ld_blocks
+from utils.wordpress_signals import has_wp_comment_form as _has_wp_comment_form
 
 
 # الگوی E1: عدد + "سال" + فعل/اسم تجربه‌محور در فاصله نزدیک
@@ -52,24 +54,45 @@ NEGATION_WORDS_NEAR_REVIEW = ["بدون", "فاقد", "هیچ"]
 # (حتی تو سایت‌های فارسی، مثل CMSهای وردپرس‌محور)
 COMMENT_SECTION_STRUCTURAL_PATTERNS = ["comment", "review", "nazar", "didgah", "نظر", "دیدگاه"]
 
+# نشانه‌ی فنی و مطمئن «این صفحه قابلیت نظردهی وردپرسی دارد» — منتقل
+# شده به utils/wordpress_signals.py چون trust_extractor.py (T4) هم به
+# همین تشخیص نیاز داشت (برای رد کردن فرم نظر از شمارش فرم تماس)
+
+# شمارنده‌ی عددی نظرات (مثل «۱۲ دیدگاه» یا «3 Comments») — نشانه‌ی
+# قوی‌تر از صرفاً وجود کلمه، چون خودِ عدد یعنی واقعاً نظر ثبت شده
+NUMERIC_COMMENT_COUNT_PATTERN = re.compile(
+    r"(\d+|[۰-۹]+)\s*(?:دیدگاه|نظر|comments?)", re.IGNORECASE
+)
+
+# کلاس‌های استاندارد وردپرس برای خودِ آیتم‌های نظر (نه فرم، نه بخش‌بندی
+# کلی) — اگر این‌ها باشند یعنی واقعاً حداقل یک نظر ثبت‌شده وجود دارد
+ACTUAL_REVIEW_ITEM_CLASS_PATTERNS = ["comment-list", "comment-body", "comment-author"]
+
 # این کلمات نشان می‌دهند بخش مورد نظر احتمالاً «خبرنامه/عضویت ایمیلی»
 # است، نه واقعاً بخش نظرات — حتی اگر تصادفاً کلمه‌ای مثل «نظر» هم
 # نزدیکش باشد یا کلاس CSS مشترکی با فرم نظرات داشته باشد
 NEWSLETTER_EXCLUSION_PATTERNS = ["خبرنامه", "newsletter", "عضویت در ایمیل", "ایمیل مارکتینگ"]
 
 
-def _has_review_signal(full_text: str, max_words_before: int = 2, exclusion_window: int = 5) -> bool:
-    """جستجوی کلمات کلیدی نظرات با بررسی دقیق ۲ کلمه‌ی قبلش (نه یک
+def _has_review_signal(full_text: str, max_words_before: int = 5, exclusion_window: int = 5) -> bool:
+    """جستجوی کلمات کلیدی نظرات با بررسی دقیق ۵ کلمه‌ی قبلش (نه یک
     بازه‌ی حرفی گنگ) برای جلوگیری از تشخیص غلط جمله‌هایی مثل «این
     صفحه بدون بخش نظرات است». مثال‌هایی مثل «نظرات خودتون رو اعلام
     کنید» درست تشخیص داده می‌شوند چون کلمه‌ی منفی‌کننده‌ای نزدیکشان نیست.
+
+    رفع باگ: این پنجره قبلاً فقط ۲ کلمه بود، پس جمله‌ی کاملاً طبیعی
+    فارسی «بدون هیچ اشاره‌ای به نظرات» (که فاصله‌ی ۴ کلمه‌ای بین «بدون»
+    و «نظرات» دارد) تشخیص داده نمی‌شد. حالا با exclusion_window
+    (که برای تشخیص خبرنامه از قبل ۵ بود) هماهنگ شد.
 
     اگر کلمات مربوط به خبرنامه (مثل «خبرنامه») در فاصله‌ی نزدیک باشند،
     آن مورد نادیده گرفته می‌شود — چون احتمالاً بخش خبرنامه است، نه
     بخش نظرات واقعی (حتی اگر کلمه‌ی «نظر» هم تصادفاً آنجا آمده باشد)."""
     action_match = REVIEW_ACTION_PATTERN.search(full_text)
     if action_match:
-        before_words = full_text[:action_match.start()].split()[-3:]
+        # هماهنگ‌شده با همان پنجره‌ی max_words_before؛ قبلاً این‌جا
+        # عدد ۳ جدا و هاردکد بود، مستقل از پارامتر بالا
+        before_words = full_text[:action_match.start()].split()[-max_words_before:]
         if not any(neg in before_words for neg in NEGATION_WORDS_NEAR_REVIEW):
             return True
 
@@ -117,6 +140,45 @@ def _has_review_section_structurally(soup) -> bool:
             if any(excl.lower() in class_and_id_lower or excl.lower() in tag_text_lower
                    for excl in NEWSLETTER_EXCLUSION_PATTERNS):
                 continue
+            return True
+    return False
+
+
+def _extract_numeric_comment_count(full_text: str):
+    """
+    استخراج شمارنده‌ی عددی نظرات (مثل «۱۲ دیدگاه») از متن صفحه، اگر
+    باشد. این از صرفاً وجود کلمه مطمئن‌تر است چون خودِ عدد یعنی واقعاً
+    نظر ثبت شده، نه فقط یک برچسب/فرم خالی. اعداد فارسی هم پشتیبانی
+    می‌شوند (۰-۹ به 0-9 تبدیل می‌شود).
+    """
+    match = NUMERIC_COMMENT_COUNT_PATTERN.search(full_text)
+    if not match:
+        return None
+    persian_to_english_digits = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+    normalized = match.group(1).translate(persian_to_english_digits)
+    try:
+        return int(normalized)
+    except ValueError:
+        return None
+
+
+def _has_actual_review_items(soup) -> bool:
+    """
+    تشخیص اینکه آیا واقعاً حداقل یک نظرِ ثبت‌شده (نه فقط فرم خالی)
+    در صفحه هست — بر پایه‌ی کلاس‌های استاندارد وردپرس برای خودِ
+    آیتم‌های نظر (comment-list/comment-body/comment-author).
+
+    این تفکیک دقیقاً همان چیزی است که در نمونه‌ی dr-moghimi.com لازم
+    بود: آن صفحه یک فرم نظردهی («comment-respond») داشت ولی هیچ
+    نشانه‌ای از یک نظر واقعاً ثبت‌شده نداشت — یعنی نتیجه باید «بخش
+    نظرات پیدا شد، ولی خالی است» باشد، نه یکسان با «هیچ نشانه‌ای از
+    نظردهی در کل صفحه نیست».
+    """
+    for tag in soup.find_all(True):
+        class_and_id_lower = (
+            " ".join(tag.get("class", []) or []) + " " + (tag.get("id", "") or "")
+        ).lower()
+        if any(pattern in class_and_id_lower for pattern in ACTUAL_REVIEW_ITEM_CLASS_PATTERNS):
             return True
     return False
 
@@ -194,15 +256,8 @@ class ExperienceExtractor(BaseExtractor):
         review_count = 0
         has_review_schema = False
 
-        # برخی سایت‌ها چند بلوک JSON-LD را داخل یک ساختار @graph می‌گذارند
-        # (مثلاً {"@graph": [ {...}, {...} ]}) — باید این حالت را هم باز کنیم،
-        # وگرنه بلوک‌های تودرتوی @graph اصلاً دیده نمی‌شوند.
-        flattened_blocks = []
-        for block in parsed_page.json_ld_blocks:
-            if isinstance(block, dict) and isinstance(block.get("@graph"), list):
-                flattened_blocks.extend(block["@graph"])
-            else:
-                flattened_blocks.append(block)
+        # باز کردن @graph در صورت وجود (رجوع به utils/json_ld_utils.py)
+        flattened_blocks = flatten_json_ld_blocks(parsed_page.json_ld_blocks)
 
         for block in flattened_blocks:
             if not isinstance(block, dict):
@@ -265,21 +320,52 @@ class ExperienceExtractor(BaseExtractor):
             )
             full_text = full_text + " " + button_texts
 
+            # اول شمارنده‌ی عددی («۱۲ دیدگاه») را چک می‌کنیم — قوی‌ترین
+            # نشانه، چون خودِ عدد یعنی نظر واقعاً ثبت شده
+            numeric_count = _extract_numeric_comment_count(full_text)
+            if numeric_count is not None and numeric_count > 0:
+                score = min(numeric_count / get_threshold("e3_review_count_for_full_score"), 1.0)
+                return IndicatorResult(code="E3", value=score, raw_details={
+                    "reason": "heuristic_numeric_comment_count",
+                    "review_count": numeric_count,
+                    "note": "بر پایه شمارنده عددی نظرات در متن صفحه (نه schema.org).",
+                })
+
             text_signal = _has_review_signal(full_text)
             structural_signal = _has_review_section_structurally(parsed_page.soup)
+            wp_comment_form_present = _has_wp_comment_form(parsed_page.soup)
+            comment_feature_detected = text_signal or structural_signal or wp_comment_form_present
 
-            if text_signal or structural_signal:
+            if not comment_feature_detected:
+                return IndicatorResult(code="E3", value=0.0, raw_details={
+                    "reason": "no_evidence_found",
+                    "text_signal": False,
+                    "structural_signal": False,
+                    "wp_comment_form_present": False,
+                })
+
+            # بخش/فرم نظردهی پیدا شد؛ حالا باید تفکیک شود که آیا واقعاً
+            # نظری هم ثبت شده یا فقط یک فرم خالی است — رفع باگ: قبلاً
+            # این دو حالت هر دو یکسان ۰ می‌گرفتند و قابل‌تفکیک نبودند
+            if _has_actual_review_items(parsed_page.soup):
                 return IndicatorResult(code="E3", value=0.4, raw_details={
                     "reason": "heuristic_match_no_schema",
                     "text_signal": text_signal,
                     "structural_signal": structural_signal,
+                    "wp_comment_form_present": wp_comment_form_present,
                     "note": "امتیاز جزئی بر پایه شواهد بصری/ساختاری نظرات است "
                             "(نه تایید رسمی از طریق داده ساختاریافته schema.org).",
                 })
+
             return IndicatorResult(code="E3", value=0.0, raw_details={
-                "reason": "no_evidence_found",
-                "text_signal": False,
-                "structural_signal": False,
+                "reason": "comment_section_found_but_empty",
+                "text_signal": text_signal,
+                "structural_signal": structural_signal,
+                "wp_comment_form_present": wp_comment_form_present,
+                "note": "بخش/فرم نظردهی در صفحه پیدا شد، ولی هیچ نظر واقعاً "
+                        "ثبت‌شده‌ای یافت نشد — امتیاز صفر است چون شاهدی از "
+                        "تجربه‌ی واقعی کاربران وجود ندارد، اما این با «هیچ "
+                        "قابلیت نظردهی‌ای نیست» فرق دارد.",
             })
 
         score = min(review_count / get_threshold("e3_review_count_for_full_score"), 1.0)

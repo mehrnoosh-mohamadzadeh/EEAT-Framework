@@ -12,6 +12,9 @@ import re
 from extractors.base import BaseExtractor, IndicatorResult
 from utils.domain_utils import score_institutional_verification
 from utils.linked_page import fetch_linked_page_text
+from utils.json_ld_utils import flatten_json_ld_blocks
+from utils.address_patterns import ADDRESS_KEYWORD_PATTERN, ADDRESS_STRUCTURE_PATTERN, POSTAL_CODE_PATTERN
+from utils.link_matching import find_matching_link_href
 
 
 # الگوهای تشخیص لینک صفحه «درباره ما»
@@ -20,13 +23,17 @@ ABOUT_LINK_PATTERNS = ["about", "درباره", "درباره-ما", "دربار
 # الگوهای تشخیص ۳ جزئیات قابل‌راستی‌آزمایی (طبق A3 در فرهنگ شاخص‌ها)
 REGISTRATION_NUMBER_PATTERN = re.compile(r"شماره\s*ثبت\s*[:\-]?\s*\d+")
 FOUNDING_YEAR_PATTERN = re.compile(r"(تأسیس|تاسیس)\s*[:\-]?\s*(1[34]\d{2}|\d{4})")
-# نشانه آدرس فیزیکی: یا کلمه «آدرس» به همراه متن قابل توجه بعدش، یا کدپستی ۱۰ رقمی
-ADDRESS_KEYWORD_PATTERN = re.compile(r"آدرس\s*[:\-]?\s*\S+")
-POSTAL_CODE_PATTERN = re.compile(r"\b\d{10}\b")
+# نشانه آدرس فیزیکی: منبع مشترک با T4 در trust_extractor.py — رجوع
+# به utils/address_patterns.py (شامل رفع باگ false-positive روی
+# «آدرس ایمیل»/«آدرس سایت»)
 
 
 class AuthorityExtractor(BaseExtractor):
     component_name = "Authoritativeness"
+
+    # پروتکل‌هایی که اصلاً صفحه‌ی وب نیستند و نباید دانلود شوند —
+    # همان لیست trust_extractor.py (T3/T4)، برای یکسان بودن رفتار
+    NON_FETCHABLE_SCHEMES = ("tel:", "mailto:", "sms:", "javascript:", "#")
 
     def extract(self, parsed_page) -> list[IndicatorResult]:
         return [
@@ -82,18 +89,14 @@ class AuthorityExtractor(BaseExtractor):
     def _find_organization_block(self, json_ld_blocks: list) -> dict | None:
         """
         جستجوی اولین بلوک JSON-LD از نوع Organization در میان بلوک‌های
-        استخراج‌شده. برخی سایت‌ها این بلوک را در قالب یک لیست (@graph)
-        قرار می‌دهند که این تابع هر دو حالت را پوشش می‌دهد.
+        استخراج‌شده (پس از باز کردن @graph در صورت وجود — رجوع به
+        utils/json_ld_utils.py).
         """
-        for block in json_ld_blocks:
-            candidates = block.get("@graph", [block]) if isinstance(block, dict) else []
-            for candidate in candidates:
-                if not isinstance(candidate, dict):
-                    continue
-                schema_type = candidate.get("@type", "")
-                type_list = schema_type if isinstance(schema_type, list) else [schema_type]
-                if "Organization" in type_list:
-                    return candidate
+        for candidate in flatten_json_ld_blocks(json_ld_blocks):
+            schema_type = candidate.get("@type", "")
+            type_list = schema_type if isinstance(schema_type, list) else [schema_type]
+            if "Organization" in type_list:
+                return candidate
         return None
 
     def _count_social_media_links(self, parsed_page) -> int:
@@ -121,6 +124,12 @@ class AuthorityExtractor(BaseExtractor):
         خودِ صفحه‌ی «درباره ما» هستند، نه لزوماً در فوتر صفحه‌ی فعلی.
         اگر دنبال‌کردن لینک شکست بخورد (شبکه/تایم‌اوت)، فقط به شواهد
         صفحه‌ی فعلی بسنده می‌شود (بدون کرش).
+
+        رفع باگ/هماهنگ‌سازی: تشخیص آدرس فیزیکی حالا از همان منبع
+        مشترک با T4 می‌آید (utils/address_patterns.py) — قبلاً این دو
+        شاخص دو نسخه‌ی کمی متفاوت از این الگو داشتند (مثلاً نسخه‌ی
+        این‌جا «نشانی» و بررسی ساختاری خیابان/میدان را نداشت، و هر دو
+        نسخه با «آدرس ایمیل»/«آدرس سایت» اشتباه می‌گرفتند).
         """
         about_href = self._find_about_link_href(parsed_page)
         if about_href is None:
@@ -132,7 +141,9 @@ class AuthorityExtractor(BaseExtractor):
         combined_text = current_page_text + " " + (linked_page_text or "")
 
         details_found = []
-        if ADDRESS_KEYWORD_PATTERN.search(combined_text) or POSTAL_CODE_PATTERN.search(combined_text):
+        if (ADDRESS_KEYWORD_PATTERN.search(combined_text)
+                or ADDRESS_STRUCTURE_PATTERN.search(combined_text)
+                or POSTAL_CODE_PATTERN.search(combined_text)):
             details_found.append("physical_address")
         if REGISTRATION_NUMBER_PATTERN.search(combined_text):
             details_found.append("registration_number")
@@ -146,13 +157,17 @@ class AuthorityExtractor(BaseExtractor):
         })
 
     def _find_about_link_href(self, parsed_page) -> str | None:
-        """پیدا کردن href اولین لینکی که با الگوهای درباره‌ما تطابق دارد."""
-        for link in parsed_page.all_links:
-            href = link["href"].lower()
-            text = link["text"].lower()
-            parent_text = link.get("parent_text", "").lower()
-            img_alt_text = link.get("img_alt_text", "").lower()
-            if any(pattern in href or pattern in text or pattern in parent_text or pattern in img_alt_text
-                   for pattern in ABOUT_LINK_PATTERNS):
-                return link["href"]
-        return None
+        """
+        پیدا کردن href اولین لینکی که با الگوهای درباره‌ما تطابق دارد.
+
+        رفع باگ (substring خام روی href/متن — نمونه واقعی: «/blog/
+        about-machine-learning» به‌اشتباه به‌عنوان لینک «درباره ما»
+        تشخیص داده می‌شد): حالا از منطق مشترک و دقیق‌تر
+        utils/link_matching.py استفاده می‌شود — رجوع به داکیومنت آن
+        ماژول برای جزئیات کامل. علاوه بر این، لینک‌های غیرقابل‌دانلود
+        (مثل «#درباره» یا «javascript:...») هم اکنون نادیده گرفته
+        می‌شوند تا وقت روی دانلود یک لینک بی‌فایده تلف نشود — همان
+        فیلتری که در T3/T4 (trust_extractor.py) از قبل وجود داشت.
+        """
+        return find_matching_link_href(parsed_page.all_links, ABOUT_LINK_PATTERNS,
+                                        non_fetchable_schemes=self.NON_FETCHABLE_SCHEMES)

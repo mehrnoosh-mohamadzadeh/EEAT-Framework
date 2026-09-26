@@ -27,11 +27,19 @@ def tokenize_words(text: str) -> tuple[list[str], str]:
 def tokenize_sentences(text: str) -> tuple[list[str], str]:
     """
     بازمی‌گرداند: (لیست جملات, نام روش استفاده‌شده)
+
+    رفع باگ: fallback قبلی روی هر نقطه‌ای می‌شکست، حتی نقطه‌ای که
+    بین دو رقم است (مثل جداکننده‌ی هزارگان در «10.000.000 تومان» یا
+    اعشار در «10.5 درصد») — که در محتوای مالی فارسی خیلی رایج است.
+    نتیجه‌اش این بود که یک متن مالی پر از عدد، به ده‌ها «جمله»ی
+    تک‌کلمه‌ای (مثل «000») تقسیم می‌شد و میانگین طول جمله در X4 به‌شدت
+    و به‌غلط پایین می‌آمد. حالا نقطه‌ای که بلافاصله قبل یا بعدش رقم
+    باشد، پایان جمله حساب نمی‌شود.
     """
     try:
         from hazm import sent_tokenize as hazm_sent_tokenize
         sentences = hazm_sent_tokenize(text)
         return [s for s in sentences if s.strip()], "hazm"
     except ImportError:
-        sentences = [s for s in re.split(r"[.!؟?]\s*", text) if s.strip()]
+        sentences = [s for s in re.split(r"(?<!\d)[.!؟?](?!\d)\s*", text) if s.strip()]
         return sentences, "simple_split"

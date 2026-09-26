@@ -12,11 +12,45 @@ from urllib.parse import urlparse
 from extractors.base import BaseExtractor, IndicatorResult
 from utils.persian_dates import find_jalali_date_in_text, jalali_to_gregorian, days_since
 from utils.linked_page import fetch_linked_page_text, fetch_linked_page
-from utils.settings_loader import get_threshold
+from utils.settings_loader import get_threshold, get_external_data_setting, get_fetcher_setting
+from utils.wayback import estimate_last_content_change
+from utils.json_ld_utils import flatten_json_ld_blocks
+from utils.wordpress_signals import is_wp_comment_form_tag
+from utils.address_patterns import ADDRESS_KEYWORD_PATTERN, ADDRESS_STRUCTURE_PATTERN, POSTAL_CODE_PATTERN
+from utils.link_matching import find_matching_link_href
 
 
-PRIVACY_LINK_PATTERNS = ["privacy", "حریم-خصوصی", "حریم_خصوصی", "سیاست-حفظ-حریم"]
-CONTACT_LINK_PATTERNS = ["contact", "تماس-با-ما", "تماس_با_ما"]
+PRIVACY_LINK_PATTERNS = ["privacy", "حریم", "خصوصی"]
+# رفع باگ (همان کلاس باگ CONTACT_LINK_PATTERNS بالا): نسخه‌ی قبل فقط
+# عبارت دقیق «حریم-خصوصی»/«حریم_خصوصی» (با خط‌تیره/زیرخط) را می‌پذیرفت.
+# متن واقعی لینک‌ها معمولاً با فاصله‌ی معمولی نوشته می‌شود («حریم خصوصی»)
+# نه خط‌تیره — خط‌تیره قرارداد نوشتن slug در URL است، نه نوشتن طبیعی
+# فارسی. حالا کلمه‌ی پایه («حریم» یا «خصوصی») به‌تنهایی کافی است.
+CONTACT_LINK_PATTERNS = ["contact", "تماس", "تماس-با-ما", "تماس_با_ما"]
+# رفع باگ (نمونه‌ی واقعی dr-moghimi.com): قبلاً فقط عبارت دقیق
+# «تماس-با-ما»/«تماس_با_ما» پذیرفته می‌شد. لینک واقعی این سایت
+# «تماس-با-دکتر» بود (نه «...با-ما») و اصلاً پیدا نمی‌شد. این
+# ناهماهنگ با ABOUT_LINK_PATTERNS هم بود که از قبل کلمه‌ی پایه‌ی
+# «درباره» را به‌تنهایی هم می‌پذیرفت. حالا هر دو یکسان‌اند: کلمه‌ی
+# پایه («تماس»/«درباره») به‌تنهایی کافی است، چون این‌ها متن لینک‌اند
+# (کوتاه و هدفمند)، نه متن آزاد صفحه — ریسک تشخیص غلط اینجا خیلی
+# کمتر از جست‌وجوی همین کلمه در کل متن صفحه است.
+#
+# رفع باگ (پیدا شده حین تست utils/link_matching.py): تطابق href حالا
+# فقط با «یک کلمه‌ی اضافه» نسبت به الگو مچ می‌شود (برای رد اسلاگ‌های
+# کاملاً نامرتبط مثل «contact-lens-review» — رجوع به utils/link_matching.py).
+# اما «تماس-با-ما» رایج‌ترین اسلاگ فارسی صفحه‌ی تماس است و دو کلمه‌ی
+# اضافه («با» و «ما») نسبت به «تماس» دارد، پس با آن سقفِ یک‌کلمه‌ای دیگر
+# مچ نمی‌شد. برای همین «تماس-با-ما»/«تماس_با_ما» دوباره به‌عنوان یک
+# الگوی مرکب صریح اضافه شد — دقیقاً هم‌طراز با «درباره-ما»/«درباره_ما»
+# در ABOUT_LINK_PATTERNS که از قبل همین‌طور بود.
+
+# نشانه‌های class/id/action که یعنی این فرم قطعاً فرم تماس *نیست* —
+# فرم ثبت نظر، جعبه جست‌وجو، یا فرم عضویت خبرنامه. رجوع: یافته‌ی رفع
+# باگ با نمونه‌ی واقعی dr-moghimi.com — فرم ثبت نظر آن سایت (که هیچ
+# ربطی به تماس با صاحب سایت ندارد) قبلاً اشتباهاً «فرم تماس» شمرده
+# می‌شد، چون کد فقط چک می‌کرد آیا اصلاً <form>ای روی صفحه هست یا نه.
+NON_CONTACT_FORM_ID_CLASS_PATTERNS = ["search", "newsletter", "خبرنامه", "جستجو", "جست‌وجو"]
 
 IRANIAN_PHONE_PATTERN = re.compile(
     r"(?:\+98[\s\-]?|0098[\s\-]?|0)?9\d{2}[\s\-]?\d{3}[\s\-]?\d{4}\b"   # موبایل
@@ -27,10 +61,8 @@ EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 # ولی وجودش خودش شاهدی بر ارائه ایمیل توسط سایت است)
 CLOUDFLARE_EMAIL_PROTECTION_PATTERN = re.compile(r"__cf_email__|data-cfemail")
 
-ADDRESS_KEYWORD_PATTERN = re.compile(r"(آدرس|نشانی)\s*[:\-]?\s*\S+")
-# نشانه‌های ساختاری آدرس فیزیکی حتی بدون کلمه «آدرس»/«نشانی» قبلش
-ADDRESS_STRUCTURE_PATTERN = re.compile(r"خیابان|میدان|کوچه|بلوار|پلاک|بزرگراه")
-POSTAL_CODE_PATTERN = re.compile(r"\b\d{10}\b")
+# تشخیص آدرس فیزیکی: منبع مشترک با A3 در authority_extractor.py —
+# رجوع به utils/address_patterns.py
 
 # لینک‌های واتساپ — خودشان مدرک مستقیم یک کانال تماس هستند، نیازی به
 # دانلود جداگانه صفحه‌ی مقصد نیست (که معمولاً هم قابل دانلود ساده نیست)
@@ -114,9 +146,13 @@ class TrustExtractor(BaseExtractor):
                                     raw_details={"reason": "not_https"})
 
         hostname = parsed_url.hostname
+        # رفع باگ: timeout قبلاً هاردکد ۵ ثانیه بود، جدا از
+        # fetcher.timeout_seconds در config/settings.yaml که بقیه‌ی
+        # عملیات شبکه‌ی پروژه (دانلود HTML) از آن استفاده می‌کنند
+        timeout = get_fetcher_setting("timeout_seconds", 5)
         try:
             context = ssl.create_default_context()
-            with socket.create_connection((hostname, 443), timeout=5) as sock:
+            with socket.create_connection((hostname, 443), timeout=timeout) as sock:
                 with context.wrap_socket(sock, server_hostname=hostname) as ssock:
                     cert = ssock.getpeercert()
             # اگر گواهی با موفقیت از طریق create_default_context (که
@@ -168,6 +204,10 @@ class TrustExtractor(BaseExtractor):
         قبل: صفحه‌ی مقصد فقط یک‌بار دانلود می‌شود (نه دو بار جداگانه
         برای متن و برای فرم) — این تغییر به‌تنهایی زمان بررسی این
         شاخص را نصف می‌کند.
+
+        رفع باگ: قبلاً هر <form> روی صفحه (از جمله فرم ثبت نظر
+        وردپرسی، جعبه جست‌وجو، یا فرم عضویت خبرنامه) اشتباهاً «فرم
+        تماس» حساب می‌شد — رجوع به _has_likely_contact_form.
         """
         current_page_text = parsed_page.soup.get_text(separator=" ", strip=True)
 
@@ -177,8 +217,8 @@ class TrustExtractor(BaseExtractor):
         linked_text = linked_page.soup.get_text(separator=" ", strip=True) if linked_page else ""
         combined_text = current_page_text + " " + linked_text
 
-        has_form_on_current_page = parsed_page.soup.find("form") is not None
-        has_form_on_linked_page = linked_page is not None and linked_page.soup.find("form") is not None
+        has_form_on_current_page = self._has_likely_contact_form(parsed_page.soup)
+        has_form_on_linked_page = linked_page is not None and self._has_likely_contact_form(linked_page.soup)
 
         channels_found = []
         has_whatsapp_link = any(
@@ -290,11 +330,16 @@ class TrustExtractor(BaseExtractor):
 
     def _t6_content_freshness(self, parsed_page) -> IndicatorResult:
         """
-        T6 — تازگی محتوا (با پشتیبانی تقویم شمسی).
+        T6 — تازگی محتوا (با پشتیبانی تقویم شمسی + fallback به Wayback Machine).
         فرمول: max(0, min(1, 1 - (days_since_update / N)))   با N از config/settings.yaml (پیش‌فرض ۷۳۰)
 
-        اگر هیچ تاریخی یافت نشود، is_missing=True برگردانده می‌شود
-        (نه صفر) — طبق مدیریت داده گمشده در نسخه ۳ فرهنگ شاخص‌ها.
+        ترتیب منابع تاریخ (هرکدام شکست بخورد، به بعدی سقوط می‌کند):
+          ۱. JSON-LD schema.org (dateModified/datePublished) — دقیق‌ترین
+          ۲. جستجوی تاریخ شمسی در متن صفحه
+          ۳. تخمین Wayback Machine (فاز ۵؛ اختیاری، رجوع به utils/wayback.py)
+
+        اگر هیچ‌کدام جواب ندهند، is_missing=True برگردانده می‌شود (نه
+        صفر) — طبق مدیریت داده گمشده در نسخه ۳ فرهنگ شاخص‌ها.
         """
         freshness_cap = get_threshold("t6_freshness_days_cap")
 
@@ -316,24 +361,39 @@ class TrustExtractor(BaseExtractor):
 
         # سپس جستجوی تاریخ شمسی در کل متن صفحه
         full_text = parsed_page.soup.get_text(separator=" ", strip=True)
+        jalali_fallback_note = None
         try:
             jalali_date = find_jalali_date_in_text(full_text)
         except ImportError:
-            # کتابخانه jdatetime نصب نیست — این شاخص را missing علامت
-            # می‌زنیم (نه اینکه کل اجرای برنامه متوقف شود)
-            return IndicatorResult(code="T6", value=None, is_missing=True,
-                                    raw_details={"reason": "jdatetime_not_installed"})
+            jalali_date = None
+            jalali_fallback_note = "jdatetime_not_installed"
 
-        if jalali_date is None:
-            return IndicatorResult(code="T6", value=None, is_missing=True,
-                                    raw_details={"reason": "no_date_found"})
+        if jalali_date is not None:
+            gregorian_date = jalali_to_gregorian(jalali_date)
+            elapsed_days = days_since(gregorian_date)
+            score = self._freshness_score(elapsed_days, freshness_cap)
+            return IndicatorResult(code="T6", value=score, raw_details={
+                "source": "jalali_text_search",
+                "days_since_update": elapsed_days,
+            })
 
-        gregorian_date = jalali_to_gregorian(jalali_date)
-        elapsed_days = days_since(gregorian_date)
-        score = self._freshness_score(elapsed_days, freshness_cap)
-        return IndicatorResult(code="T6", value=score, raw_details={
-            "source": "jalali_text_search",
-            "days_since_update": elapsed_days,
+        # در نهایت، fallback به Wayback Machine (منبع خارج از خودِ HTML
+        # صفحه) — فقط اگر در config فعال باشد. این دقیقاً محدودیت «فقط
+        # به HTML یک صفحه دسترسی داریم» را برای T6 کاهش می‌دهد.
+        if get_external_data_setting("wayback_fallback_for_t6", False):
+            wayback_timeout = get_external_data_setting("wayback_timeout_seconds", 10)
+            estimated_date = estimate_last_content_change(parsed_page.url, timeout=wayback_timeout)
+            if estimated_date is not None:
+                elapsed_days = days_since(estimated_date)
+                score = self._freshness_score(elapsed_days, freshness_cap)
+                return IndicatorResult(code="T6", value=score, raw_details={
+                    "source": "wayback_machine_estimate",
+                    "estimated_date": estimated_date.isoformat(),
+                    "days_since_update": elapsed_days,
+                })
+
+        return IndicatorResult(code="T6", value=None, is_missing=True, raw_details={
+            "reason": jalali_fallback_note or "no_date_found_anywhere",
         })
 
     @staticmethod
@@ -373,7 +433,13 @@ class TrustExtractor(BaseExtractor):
         return max(0.0, min(1.0, 1 - (elapsed_days / cap)))
 
     def _find_schema_date(self, json_ld_blocks: list) -> str | None:
-        for block in json_ld_blocks:
+        """
+        رفع باگ: قبلاً مستقیم روی json_ld_blocks حلقه می‌زد و @graph
+        را باز نمی‌کرد — روی سایت‌های وردپرسی با Yoast SEO (که
+        dateModified را داخل @graph می‌گذارد)، این تاریخ اصلاً دیده
+        نمی‌شد. حالا از flatten_json_ld_blocks استفاده می‌شود.
+        """
+        for block in flatten_json_ld_blocks(json_ld_blocks):
             if isinstance(block, dict):
                 date_value = block.get("dateModified") or block.get("datePublished")
                 if date_value:
@@ -384,9 +450,15 @@ class TrustExtractor(BaseExtractor):
         """
         T7 — کامل‌بودن داده ساختاریافته صفحه.
         فرمول: نسبت انواع مارک‌آپ موجود از ۳ نوع اصلی (Article/Person/Organization)
+
+        رفع باگ: قبلاً مستقیم روی parsed_page.json_ld_blocks حلقه
+        می‌زد، بدون باز کردن @graph — یعنی روی سایت‌های وردپرسی با
+        Yoast SEO (که همه‌ی انواع schema را داخل یک @graph می‌گذارد)،
+        این شاخص می‌توانست بگوید «هیچ‌کدام نیست» درحالی‌که واقعاً هر
+        سه نوع در صفحه بودند، فقط داخل @graph بسته‌بندی شده بودند.
         """
         found_types = set()
-        for block in parsed_page.json_ld_blocks:
+        for block in flatten_json_ld_blocks(parsed_page.json_ld_blocks):
             if not isinstance(block, dict):
                 continue
             schema_type = block.get("@type", "")
@@ -399,21 +471,51 @@ class TrustExtractor(BaseExtractor):
         return IndicatorResult(code="T7", value=score,
                                 raw_details={"found_types": list(found_types)})
 
-    def _has_matching_link(self, parsed_page, patterns: list) -> bool:
-        return self._find_matching_link_href(parsed_page, patterns) is not None
+    def _has_likely_contact_form(self, soup) -> bool:
+        """
+        آیا دست‌کم یک <form> "محتمل برای تماس" روی این صفحه هست؟
+
+        رفع باگ: قبلاً صرفاً وجود هر <form>ای (بدون هیچ فیلتری) به
+        معنای «فرم تماس» گرفته می‌شد. نمونه‌ی واقعی که این باگ را
+        نشان داد: صفحه‌ی dr-moghimi.com که تنها فرمش، فرم ثبت نظر
+        وردپرسی بود (id="commentform") — کاملاً بی‌ربط به تماس با
+        صاحب سایت. حالا سه نوع فرم غیرمرتبط صریحاً کنار گذاشته می‌شوند:
+          ۱. فرم ثبت نظر وردپرسی (is_wp_comment_form_tag)
+          ۲. جعبه جست‌وجو (role="search" یا input type="search")
+          ۳. فرم عضویت خبرنامه (کلاس/id حاوی search/newsletter/خبرنامه)
+
+        این هنوز یک heuristic است، نه تشخیص قطعی — یک فرم تماس با
+        کلاس/id کاملاً نامرتبط و غیرمعمول ممکن است هنوز درست تشخیص
+        داده شود چون هیچ‌کدام از این سه فیلتر با آن مچ نمی‌شود؛ این
+        از جنس همان محدودیت شناخته‌شده‌ی heuristic های نام کلاس/id
+        در سراسر این پروژه است.
+        """
+        for form in soup.find_all("form"):
+            if is_wp_comment_form_tag(form):
+                continue
+            if (form.get("role") or "").lower() == "search":
+                continue
+            if form.find("input", type="search") is not None:
+                continue
+            class_and_id = (
+                " ".join(form.get("class", []) or []) + " " + (form.get("id") or "")
+            ).lower()
+            if any(pattern in class_and_id for pattern in NON_CONTACT_FORM_ID_CLASS_PATTERNS):
+                continue
+            return True
+        return False
 
     # پروتکل‌هایی که اصلاً صفحه‌ی وب نیستند و نباید دانلود شوند —
     # تلاش برای دانلودشان همیشه شکست می‌خورد و فقط وقت تلف می‌کند
     NON_FETCHABLE_SCHEMES = ("tel:", "mailto:", "sms:", "javascript:", "#")
 
     def _find_matching_link_href(self, parsed_page, patterns: list) -> str | None:
-        for link in parsed_page.all_links:
-            href = link["href"].lower()
-            text = link["text"].lower()
-            parent_text = link.get("parent_text", "").lower()
-            img_alt_text = link.get("img_alt_text", "").lower()
-            if any(p in href or p in text or p in parent_text or p in img_alt_text for p in patterns):
-                if href.startswith(self.NON_FETCHABLE_SCHEMES):
-                    continue  # این لینک قابل دانلود نیست، دنبال بعدی بگرد
-                return link["href"]
-        return None
+        """
+        رفع باگ (substring خام روی href/متن — نمونه واقعی: «/blog/
+        contact-lens-review» یا «لنزهای تماسی» به‌اشتباه به‌عنوان لینک
+        تماس/حریم‌خصوصی تشخیص داده می‌شد): حالا از منطق مشترک و
+        دقیق‌تر utils/link_matching.py استفاده می‌شود — رجوع به داکیومنت
+        آن ماژول برای جزئیات کامل.
+        """
+        return find_matching_link_href(parsed_page.all_links, patterns,
+                                        non_fetchable_schemes=self.NON_FETCHABLE_SCHEMES)

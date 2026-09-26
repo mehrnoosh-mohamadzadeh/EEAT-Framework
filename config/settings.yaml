@@ -2,7 +2,13 @@
 
 fetcher:
   timeout_seconds: 15
-  user_agent: "EEAT-Research-Framework/1.0 (academic thesis project)"
+  # رفع باگ: این مقدار قبلاً یک رشته‌ی رباتی‌نما بود
+  # ("EEAT-Research-Framework/1.0")، درحالی‌که کد واقعی (fetcher/page_downloader.py)
+  # مدت‌هاست از یک User-Agent واقعی کروم استفاده می‌کند (طبق یافته‌ی
+  # مستندشده در feature_dictionary_v3.md: نسخه‌ی رباتی باعث مسدودشدن
+  # توسط بعضی سایت‌ها می‌شد). این مقدار حالا با کد هماهنگ شد؛ اگر بعداً
+  # این‌جا عوض شود، خودِ کد هم عوض می‌شود — پس با احتیاط تغییرش بدهید.
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
   render_js: false   # اگر true باشد از Playwright استفاده می‌شود
 
 # آستانه‌های عددی شاخص‌ها — همه این مقادیر طبق فرهنگ شاخص‌ها نسخه ۳
@@ -18,6 +24,18 @@ thresholds:
   e3_review_count_for_full_score: 10
   t3_privacy_word_count_for_full_score: 300
   t6_freshness_days_cap: 730
+
+# منابع داده‌ی خارج از HTML خودِ صفحه — فاز ۵ (رفع بخشی از محدودیت
+# «فقط به HTML یک صفحه دسترسی داریم»). هرکدام کاملاً اختیاری‌اند؛ اگر
+# false باشند یا شبکه در دسترس نباشد، رفتار دقیقاً مثل قبل (is_missing)
+# باقی می‌ماند — هیچ‌کدام نباید کل اجرای ابزار را متوقف کند.
+external_data_sources:
+  # وقتی T6 نتواند تاریخ را از JSON-LD یا متن شمسی صفحه پیدا کند، از
+  # Wayback Machine CDX API (archive.org) برای تخمین آخرین تغییر واقعی
+  # محتوا استفاده می‌کند. نیازمند دسترسی اینترنت به archive.org (ممکن
+  # است نیاز به فیلترشکن داشته باشد). مرجع روش: utils/wayback.py
+  wayback_fallback_for_t6: true
+  wayback_timeout_seconds: 10
 
 # نکته: یک آستانه‌ی «correlation_merge_threshold: 0.8» قبلاً این‌جا بود
 # برای ادغام شاخص‌های همبسته، ولی هیچ کد یا بخشی از feature_dictionary_v3.md

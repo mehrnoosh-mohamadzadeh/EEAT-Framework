@@ -48,6 +48,35 @@ def get_threshold(key: str):
     return thresholds[key]
 
 
+def get_external_data_setting(key: str, default=None):
+    """
+    خواندن یک مقدار از بخش external_data_sources در config/settings.yaml
+    (مثلاً wayback_fallback_for_t6). برخلاف get_threshold، اگر کلید
+    نباشد خطا نمی‌دهد و default را برمی‌گرداند — چون این تنظیمات
+    ویژگی‌های اختیاری‌اند (فاز ۵)، نه آستانه‌ی مبنای محاسبه‌ی امتیاز؛
+    نبودشان نباید کل اجرای برنامه را متوقف کند.
+    """
+    settings = load_settings()
+    return settings.get("external_data_sources", {}).get(key, default)
+
+
+def get_fetcher_setting(key: str, default=None):
+    """
+    خواندن یک مقدار از بخش fetcher در config/settings.yaml
+    (timeout_seconds, user_agent, render_js).
+
+    رفع باگ: این بخش از قبل در settings.yaml مستند بود ولی
+    fetcher/page_downloader.py هیچ‌وقت آن را نمی‌خواند — timeout
+    واقعی کد (۲۵/۲۰ ثانیه) با ۱۵ ثانیه‌ی مستندشده هماهنگ نبود.
+
+    مثل get_external_data_setting، اگر کلید نباشد خطا نمی‌دهد و
+    default (همان مقدار پیش‌فرض قبلی کد) را برمی‌گرداند — چون شبکه/
+    فایل config در دسترس نبودن نباید کل دانلود صفحه را متوقف کند.
+    """
+    settings = load_settings()
+    return settings.get("fetcher", {}).get(key, default)
+
+
 def reset_cache_for_tests():
     """فقط برای tests: کش را خالی می‌کند تا فایل yaml دوباره خوانده شود."""
     global _settings_cache
