@@ -61,7 +61,7 @@ python -m playwright install chromium
 - `utils/`         توابع کمکی مشترک (تاریخ شمسی، تحلیل دامنه، و غیره)
 - `data/`          نمونه URL های ورودی برای فاز ارزیابی
 - `tests/`         تست واحد برای هر ماژول
-
+- `webapp/`        رابط وب (Flask) برای اجرای تعاملی چارچوب
 ## وضعیت فعلی
 
 همه‌ی ماژول‌ها (fetcher, parser, extractors, normalization, scoring,
