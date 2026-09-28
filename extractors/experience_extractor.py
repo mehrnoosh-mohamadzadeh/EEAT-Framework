@@ -5,6 +5,7 @@ Extractor مؤلفه Experience — شاخص‌های E1 تا E4.
 """
 
 import re
+from collections import Counter, defaultdict
 
 from extractors.base import BaseExtractor, IndicatorResult
 from utils.text_utils import tokenize_words
@@ -183,6 +184,105 @@ def _has_actual_review_items(soup) -> bool:
     return False
 
 
+def _count_actual_review_items(soup) -> int:
+    """
+    شمارش تعداد نظرهای واقعاً ثبت‌شده (نه فقط تشخیص وجود حداقل یکی).
+
+    رفع باگ (نمونه‌ی واقعی doctoreto.com — صفحه‌ای با ده‌ها نظر): وقتی
+    schema رسمی و شمارنده‌ی عددی متنی نبود، نتیجه فقط «حداقل یک نظر
+    هست» بود و امتیاز E3 برای هر تعداد نظر (یک نظر یا صدتا) یک عدد
+    ثابت ۰.۴ می‌شد. حالا تعداد واقعی شمرده می‌شود تا با مسیرهای دیگر
+    E3 (schema و شمارنده‌ی عددی) هم‌مقیاس باشد: min(count / N, 1).
+
+    سه روش شمارش (حداکثرِ آن‌ها گرفته می‌شود، چون قالب‌های مختلف
+    یکی از این ساختارها را دارند و شمردن هر سه با هم دوباره‌شماری
+    ایجاد می‌کرد):
+      ۱) تعداد عناصر با کلاسِ دقیق «comment-body»
+      ۲) تعداد عناصر با کلاسِ دقیق «comment-author»
+      ۳) تعداد شناسه‌های یکتای وردپرسی «comment-<عدد>» (با حذف
+         پیشوند «div-» تا یک نظر دو بار شمرده نشود)
+    اگر هیچ‌کدام عددی ندهد ولی وجود نظر قبلاً تأیید شده، حداقل ۱ برمی‌گردد.
+    """
+    body_count = 0
+    author_count = 0
+    wp_ids = set()
+    wp_id_pattern = re.compile(r"^(?:div-)?comment-(\d+)$")
+
+    for tag in soup.find_all(True):
+        classes = tag.get("class", []) or []
+        if "comment-body" in classes:
+            body_count += 1
+        if "comment-author" in classes:
+            author_count += 1
+        match = wp_id_pattern.match(tag.get("id", "") or "")
+        if match:
+            wp_ids.add(match.group(1))
+
+    return max(body_count, author_count, len(wp_ids), 1)
+
+
+# تگ‌هایی که هرگز خودِ «آیتم نظر» نیستند (فرم، دکمه، لینک، تصویر و مشابه)
+_NON_ITEM_TAGS = {"script", "style", "form", "textarea", "input", "button", "a",
+                  "select", "option", "svg", "path", "img", "label"}
+
+# حداقل تعداد کلمه‌ی متن داخل یک عنصر تا «آیتم نظر» حساب شود؛ عناصر کوتاهِ
+# تکراری (تاریخ، نام کاربر، دکمه‌ی پاسخ، ستاره) با این شرط کنار می‌روند
+_MIN_WORDS_FOR_COMMENT_ITEM = 3
+
+
+def _count_repeated_comment_items(soup) -> int:
+    """
+    شمارش نظرها بر پایه‌ی «ساختار تکرارشونده»، مستقل از نام دقیق کلاس‌ها —
+    برای سایت‌هایی که وردپرس نیستند (پلتفرم‌های سفارشی، Next.js با کلاس‌های
+    هش‌شده مثل Comments_item__a1b2 و غیره).
+
+    ایده: آیتم‌های یک لیست نظر همیشه یک قالب یکسان دارند و چندبار تکرار
+    می‌شوند. پس:
+      ۱) همه‌ی عناصری که کلاسشان کلمه‌ی مرتبط با نظر دارد جمع می‌شوند؛
+      ۲) بر اساس (نام تگ + کوتاه‌ترین کلاس مرتبط) گروه‌بندی می‌شوند —
+         کوتاه‌ترین، چون وردپرس کلاس‌های متغیر مثل «comment-author-admin»
+         یا «depth-2» هم اضافه می‌کند که نباید گروه را بشکند؛
+      ۳) فقط عناصر دارای متن واقعی (حداقل ۳ کلمه) و بدون فرم داخلشان
+         حساب می‌شوند؛
+      ۴) بین گروه‌های تکرارشونده (حداقل ۲ عضو)، اندازه‌ای انتخاب می‌شود که
+         در بیشترین گروه‌ها مشترک است (مثلاً «آیتم»، «بدنه» و «متن» هرکدام
+         N بار)، تا زیرعنصری که در هر نظر چندبار آمده، عدد را باد نکند.
+    اگر هیچ ساختار تکراری پیدا نشود، ۰ برمی‌گردد.
+    """
+    groups = defaultdict(list)
+    for tag in soup.find_all(True):
+        if tag.name in _NON_ITEM_TAGS:
+            continue
+        classes = [c.lower() for c in (tag.get("class", []) or [])]
+        keyword_tokens = [c for c in classes
+                          if any(k in c for k in COMMENT_SECTION_STRUCTURAL_PATTERNS)]
+        if not keyword_tokens:
+            continue
+        signature = (tag.name, min(keyword_tokens, key=len))
+        groups[signature].append(tag)
+
+    sizes = []
+    for members in groups.values():
+        valid = []
+        for tag in members:
+            text = tag.get_text(separator=" ", strip=True)
+            if len(text.split()) < _MIN_WORDS_FOR_COMMENT_ITEM:
+                continue
+            if tag.find(["form", "textarea"]) is not None:
+                continue
+            if any(excl in text.lower() for excl in NEWSLETTER_EXCLUSION_PATTERNS):
+                continue
+            valid.append(tag)
+        if len(valid) >= 2:
+            sizes.append(len(valid))
+
+    if not sizes:
+        return 0
+    size_frequency = Counter(sizes)
+    # بیشترین تکرار؛ در تساوی، عدد کوچک‌تر (محتاطانه‌تر)
+    return max(size_frequency.items(), key=lambda kv: (kv[1], -kv[0]))[0]
+
+
 class ExperienceExtractor(BaseExtractor):
     component_name = "Experience"
 
@@ -255,6 +355,8 @@ class ExperienceExtractor(BaseExtractor):
         """
         review_count = 0
         has_review_schema = False
+        comment_blocks_count = 0
+        comment_schema_max = 0
 
         # باز کردن @graph در صورت وجود (رجوع به utils/json_ld_utils.py)
         flattened_blocks = flatten_json_ld_blocks(parsed_page.json_ld_blocks)
@@ -272,6 +374,24 @@ class ExperienceExtractor(BaseExtractor):
                 has_review_schema = True
                 review_count += 1
 
+            # نظرهای وبلاگی/مقاله‌ای در schema.org نوع «Comment» هستند (نه Review):
+            # هم به‌صورت بلاک مستقل، هم فیلد commentCount، هم فیلد comment داخل Article
+            if "Comment" in type_list or "UserComments" in type_list:
+                comment_blocks_count += 1
+            declared_comment_count = block.get("commentCount")
+            try:
+                declared_comment_count = int(declared_comment_count)
+            except (TypeError, ValueError):
+                declared_comment_count = 0
+            nested_comments = block.get("comment")
+            if nested_comments is not None:
+                nested_comment_items = nested_comments if isinstance(nested_comments, list) else [nested_comments]
+                declared_comment_count = max(
+                    declared_comment_count,
+                    len([c for c in nested_comment_items if isinstance(c, dict)]),
+                )
+            comment_schema_max = max(comment_schema_max, declared_comment_count)
+
             # حالت تودرتو ۱: AggregateRating به‌عنوان فیلد داخل Product/Article
             nested_rating = block.get("aggregateRating")
             if isinstance(nested_rating, dict):
@@ -288,6 +408,27 @@ class ExperienceExtractor(BaseExtractor):
                 if valid_reviews:
                     has_review_schema = True
                     review_count = max(review_count, len(valid_reviews))
+
+        schema_comment_total = max(comment_blocks_count, comment_schema_max)
+        if schema_comment_total > 0:
+            has_review_schema = True
+            review_count = max(review_count, schema_comment_total)
+
+        # Microdata: نوع Comment و فیلد commentCount
+        microdata_comments = parsed_page.soup.find_all(
+            attrs={"itemtype": lambda v: v and "schema.org/Comment" in v}
+        )
+        microdata_comment_count = len(microdata_comments)
+        comment_count_tag = parsed_page.soup.find(attrs={"itemprop": "commentCount"})
+        if comment_count_tag is not None:
+            raw_count = comment_count_tag.get("content") or comment_count_tag.get_text(strip=True)
+            try:
+                microdata_comment_count = max(microdata_comment_count, int(raw_count))
+            except (TypeError, ValueError):
+                pass
+        if microdata_comment_count > 0:
+            has_review_schema = True
+            review_count = max(review_count, microdata_comment_count)
 
         # علاوه بر JSON-LD، بعضی سایت‌ها (خصوصاً قالب‌های وردپرسی فارسی)
         # به‌جای JSON-LD از فرمت Microdata استفاده می‌کنند — یعنی به‌جای
@@ -310,6 +451,14 @@ class ExperienceExtractor(BaseExtractor):
                 count_text = count_tag.get("content") or count_tag.get_text(strip=True)
                 if count_text and count_text.isdigit():
                     review_count = max(review_count, int(count_text))
+
+        # رفع باگ (نمونه‌ی واقعی doctoreto.com): افزونه‌های ستاره‌دهی اغلب یک
+        # AggregateRating با ratingCount=0 در صفحه می‌گذارند. قبلاً همین وجودِ
+        # schema، حتی با تعداد صفر، کل شمارش نظرهای واقعی HTML را کنار می‌زد و
+        # صفحه‌ای با ده‌ها نظر امتیاز ۰ می‌گرفت. schema فقط وقتی مسیر اصلی است که
+        # واقعاً تعداد مثبتی اعلام کرده باشد.
+        if has_review_schema and review_count == 0:
+            has_review_schema = False
 
         if not has_review_schema:
             full_text = parsed_page.soup.get_text(separator=" ", strip=True)
@@ -347,13 +496,24 @@ class ExperienceExtractor(BaseExtractor):
             # بخش/فرم نظردهی پیدا شد؛ حالا باید تفکیک شود که آیا واقعاً
             # نظری هم ثبت شده یا فقط یک فرم خالی است — رفع باگ: قبلاً
             # این دو حالت هر دو یکسان ۰ می‌گرفتند و قابل‌تفکیک نبودند
-            if _has_actual_review_items(parsed_page.soup):
-                return IndicatorResult(code="E3", value=0.4, raw_details={
+            # دو روش شمارش مستقل: ساختار استاندارد وردپرس، و ساختار تکرارشونده‌ی
+            # عمومی (برای سایت‌های غیر وردپرسی) — بزرگ‌ترین عدد معتبر می‌شود
+            wordpress_count = (_count_actual_review_items(parsed_page.soup)
+                               if _has_actual_review_items(parsed_page.soup) else 0)
+            repeated_count = _count_repeated_comment_items(parsed_page.soup)
+            actual_count = max(wordpress_count, repeated_count)
+
+            if actual_count > 0:
+                score = min(actual_count / get_threshold("e3_review_count_for_full_score"), 1.0)
+                return IndicatorResult(code="E3", value=score, raw_details={
                     "reason": "heuristic_match_no_schema",
+                    "review_count": actual_count,
+                    "counting_method": ("wordpress_standard" if wordpress_count >= repeated_count
+                                        else "repeated_structure"),
                     "text_signal": text_signal,
                     "structural_signal": structural_signal,
                     "wp_comment_form_present": wp_comment_form_present,
-                    "note": "امتیاز جزئی بر پایه شواهد بصری/ساختاری نظرات است "
+                    "note": "بر پایه‌ی شمارش نظرهای واقعی در ساختار HTML صفحه است "
                             "(نه تایید رسمی از طریق داده ساختاریافته schema.org).",
                 })
 
