@@ -122,6 +122,116 @@ class TestExperienceExtractor:
         assert result.value > 0.0
         assert result.raw_details["reason"] == "heuristic_match_no_schema"
 
+    def test_e3_many_real_comments_score_higher_than_one(self):
+        """
+        رگرسیون (نمونه‌ی واقعی doctoreto.com): صفحه‌ای با ده‌ها نظر واقعی
+        قبلاً همان امتیاز ثابت صفحه‌ی تک‌نظری را می‌گرفت. حالا تعداد
+        واقعی نظرها شمرده می‌شود.
+        """
+        items = "".join(
+            f'<li class="comment" id="comment-{i}"><div class="comment-body" id="div-comment-{i}">'
+            f'<div class="comment-author">کاربر {i}</div>متن نظر</div></li>'
+            for i in range(1, 13)
+        )
+        html = f'<html><body><article><p>مقاله</p></article><div id="comments"><ol class="comment-list">{items}</ol></div></body></html>'
+        many = ExperienceExtractor()._e3_user_reviews(parse_html(html, "https://example.com/a"))
+        one = ExperienceExtractor()._e3_user_reviews(
+            parse_html(SAMPLE_HTML_WP_WITH_REAL_COMMENT, "https://example.com/b"))
+        assert many.raw_details["review_count"] == 12
+        assert many.value == 1.0
+        assert one.value < many.value
+
+    def test_e3_comment_counting_does_not_double_count_same_comment(self):
+        """li#comment-5 و div#div-comment-5 یک نظرند، نه دو نظر."""
+        html = (
+            '<html><body><article><p>مقاله</p></article><ol class="comment-list">'
+            '<li id="comment-5"><div id="div-comment-5" class="comment-body">'
+            '<div class="comment-author">علی</div>خوب بود</div></li></ol></body></html>'
+        )
+        result = ExperienceExtractor()._e3_user_reviews(parse_html(html, "https://example.com/c"))
+        assert result.raw_details["review_count"] == 1
+
+    @staticmethod
+    def _e3(html):
+        return ExperienceExtractor()._e3_user_reviews(parse_html(html, "https://example.com/x"))
+
+    _ARTICLE = "<article><h1>مقاله</h1><p>متن مقاله‌ی نمونه درباره‌ی موضوعی مفید.</p></article>"
+    _COMMENT_TEXT = "این مقاله خیلی برای من مفید بود ممنون"
+
+    def test_e3_counts_comments_on_non_wordpress_hashed_class_markup(self):
+        """
+        رگرسیون (هدف: کار کردن روی هر سایت، نه فقط وردپرس): پلتفرم‌های
+        سفارشی/Next.js کلاس‌های هش‌شده‌ای مثل Comments_item__a1b2 دارند.
+        """
+        items = "".join(
+            f'<div class="Comments_item__a1b2"><span class="Comments_name__x1">کاربر {i}</span>'
+            f'<p class="Comments_text__c3">{self._COMMENT_TEXT} {i}</p></div>' for i in range(8))
+        html = f'<html><body>{self._ARTICLE}<section class="Comments_wrapper__z9">{items}</section></body></html>'
+        result = self._e3(html)
+        assert result.raw_details["review_count"] == 8
+        assert result.raw_details["counting_method"] == "repeated_structure"
+
+    def test_e3_counts_comments_on_custom_review_card_markup(self):
+        items = "".join(
+            f'<li class="user-review-card"><b class="reviewer">نفر {i}</b>'
+            f'<div class="review-content">{self._COMMENT_TEXT} {i}</div></li>' for i in range(5))
+        html = f'<html><body>{self._ARTICLE}<ul class="reviews">{items}</ul></body></html>'
+        assert self._e3(html).raw_details["review_count"] == 5
+
+    def test_e3_wordpress_variable_classes_do_not_split_the_count(self):
+        """کلاس‌های متغیر وردپرس (even/odd/depth-2/comment-author-admin) نباید شمارش را بشکنند."""
+        def wp(i, cls):
+            return (f'<li class="comment {cls}" id="comment-{i}"><div class="comment-body" id="div-comment-{i}">'
+                    f'<div class="comment-author">علی</div><p>{self._COMMENT_TEXT} {i}</p></div></li>')
+        html = (f'<html><body>{self._ARTICLE}<div id="comments"><ol class="comment-list">'
+                f'{wp(1, "even depth-1")}{wp(2, "odd byuser comment-author-admin")}{wp(3, "even")}'
+                f'{wp(4, "odd depth-2")}{wp(5, "even")}</ol></div></body></html>')
+        assert self._e3(html).raw_details["review_count"] == 5
+
+    def test_e3_json_ld_comment_count_field(self):
+        html = ('<html><head><script type="application/ld+json">'
+                '{"@type":"BlogPosting","commentCount":14}</script></head>'
+                f'<body>{self._ARTICLE}</body></html>')
+        result = self._e3(html)
+        assert result.raw_details["review_count"] == 14
+        assert result.value == 1.0
+
+    def test_e3_json_ld_nested_comment_array(self):
+        html = ('<html><head><script type="application/ld+json">{"@type":"Article","comment":'
+                '[{"@type":"Comment","text":"a"},{"@type":"Comment","text":"b"},{"@type":"Comment","text":"c"}]}'
+                f'</script></head><body>{self._ARTICLE}</body></html>')
+        assert self._e3(html).raw_details["review_count"] == 3
+
+    def test_e3_microdata_comment_items(self):
+        items = "".join(
+            f'<div itemprop="comment" itemscope itemtype="https://schema.org/Comment">'
+            f'<span itemprop="text">{self._COMMENT_TEXT}</span></div>' for _ in range(4))
+        assert self._e3(f'<html><body>{self._ARTICLE}{items}</body></html>').raw_details["review_count"] == 4
+
+    def test_e3_zero_count_schema_does_not_hide_real_html_comments(self):
+        """
+        رگرسیون (نمونه‌ی واقعی doctoreto.com): AggregateRating افزونه‌ی ستاره‌دهی با
+        ratingCount=0 نباید جلوی شمارش نظرهای واقعیِ داخل HTML را بگیرد.
+        """
+        items = "".join(
+            f'<li class="comment" id="li-comment-{i}"><div class="comment-body">'
+            f'<div class="comment-author">کاربر {i}</div><p>{self._COMMENT_TEXT} {i}</p></div></li>'
+            for i in range(1, 7))
+        html = ('<html><head><script type="application/ld+json">'
+                '{"@type":"AggregateRating","ratingCount":0,"ratingValue":0}</script></head>'
+                f'<body>{self._ARTICLE}<ol class="comment-list">{items}</ol></body></html>')
+        result = self._e3(html)
+        assert result.raw_details["review_count"] == 6
+        assert result.value > 0.0
+
+    def test_e3_short_repeated_counters_on_related_cards_are_not_comments(self):
+        """کارت‌های مقالات مرتبط با شمارنده‌ی کوتاه، «نظر واقعی» حساب نمی‌شوند."""
+        cards = "".join(
+            f'<div class="post-card"><h4>عنوان {i}</h4><span class="comments-count">{i} کامنت</span></div>'
+            for i in range(1, 5))
+        result = self._e3(f'<html><body>{self._ARTICLE}<div class="related">{cards}</div></body></html>')
+        assert result.value == 0.0
+
     def test_e3_no_comment_feature_at_all_has_different_reason_than_empty_form(self):
         """صفحه‌ای که اصلاً فرم/بخش نظردهی ندارد باید دلیل متفاوتی از «پیدا شد ولی خالی است» داشته باشد."""
         parsed = parse_html(SAMPLE_HTML_NO_COMMENT_FEATURE_AT_ALL, "https://example.com/no-comments")
