@@ -1,38 +1,168 @@
 {% extends "base.html" %}
-{% block title %}ارزیاب E-E-A-T — بررسی کیفیت صفحه وب{% endblock %}
+{% block title %}ارزیاب E-E-A-T — سنجش نشانه‌های کیفیت محتوای یک صفحه‌ی وب{% endblock %}
 {% block content %}
+{% set is_compare = (mode == 'compare') %}
 
-<div class="scanner">
-  <p class="eyebrow">دستگاه ارزیابی E-E-A-T</p>
-  <h1 class="display">صفحه‌ات چقدر قابل‌اعتماده؟</h1>
-  <p class="lede">
-    آدرس یک صفحه وب فارسی رو بده تا ۱۹ شاخص تجربه، تخصص، اقتدار و
-    اعتماد رو بررسی کنیم و بگیم دقیقاً کجای کارت باید بهتر بشه.
-  </p>
+<div class="intro">
+  <section class="intro-main">
+    <h1 class="page-title">ارزیابی نشانه‌های E-E-A-T یک صفحه‌ی وب</h1>
+    <p class="lede">
+      آدرس یک صفحه‌ی وب فارسی را وارد کنید. ابزار ۱۹ نشانه‌ی تجربه، تخصص، اقتدار و اعتماد را
+      می‌سنجد و برای هر نشانه دلیل نمره و پیشنهاد بهبود می‌دهد.
+    </p>
 
-  <form action="{{ url_for('analyze') }}" method="post" class="scan-form">
-    <input
-      type="text"
-      name="url"
-      placeholder="مثلاً: fa.wikipedia.org/wiki/ایران"
-      value="{{ failed_url or '' }}"
-      autofocus
-      required
+    <fieldset class="mode-switch">
+      <legend class="visually-hidden">نوع بررسی</legend>
+      <input type="radio" name="mode" id="mode-single" value="single" {% if not is_compare %}checked{% endif %}>
+      <label for="mode-single">تحلیل یک صفحه</label>
+      <input type="radio" name="mode" id="mode-compare" value="compare" {% if is_compare %}checked{% endif %}>
+      <label for="mode-compare">مقایسه‌ی دو صفحه</label>
+    </fieldset>
+
+    <form
+      action="{{ url_for('compare') if is_compare else url_for('analyze') }}"
+      method="post"
+      class="scan-form{% if is_compare %} compare-mode{% endif %}"
+      id="scan-form"
+      data-analyze-action="{{ url_for('analyze') }}"
+      data-compare-action="{{ url_for('compare') }}"
     >
-    <button type="submit">بررسی کن</button>
-  </form>
+      <label class="field">
+        <span class="field-name" id="first-name">{% if is_compare %}صفحه‌ی اول{% else %}آدرس صفحه{% endif %}</span>
+        <input
+          type="text"
+          name="url"
+          placeholder="مثلاً fa.wikipedia.org/wiki/ایران"
+          value="{{ (url_a if is_compare else failed_url) or '' }}"
+          autocomplete="off"
+          autofocus
+          required
+        >
+      </label>
+      <label class="field second-url-field"{% if not is_compare %} hidden{% endif %}>
+        <span class="field-name">صفحه‌ی دوم</span>
+        <input
+          type="text"
+          name="url2"
+          class="second-url"
+          placeholder="آدرس صفحه‌ی دوم"
+          value="{{ url_b or '' }}"
+          autocomplete="off"
+          {% if not is_compare %}hidden disabled{% endif %}
+        >
+      </label>
+      <button type="submit" id="scan-submit">{% if is_compare %}مقایسه کن{% else %}بررسی کن{% endif %}</button>
+    </form>
 
-  {% if error %}
-  <div class="scan-error">
-    <span class="dot fail"></span>
-    <span>{{ error }}</span>
-  </div>
-  {% endif %}
+    {% if error %}
+    <div class="notice" role="alert">
+      <p class="notice-title">بررسی انجام نشد</p>
+      {# پیام‌های دانلود/پردازش یک جمله‌ی خوانا + جزئیات فنی (که می‌تواند طولانی و لاتین باشد) دارند؛ جزئیات در بخش بازشو می‌آید #}
+      {% set cut = error.split(' جزئیات: ', 1) if ' جزئیات: ' in error else (error.split(': ', 1) if 'رخ داد' in error else [error]) %}
+      <p class="notice-text">{{ cut[0] }}</p>
+      {% if cut | length > 1 %}
+      <details class="notice-details">
+        <summary>جزئیات فنی</summary>
+        <bdi dir="ltr">{{ cut[1] }}</bdi>
+      </details>
+      {% endif %}
+      {% if 'دانلود' in error or 'خطایی' in error %}
+      <ul class="notice-hints">
+        <li>آدرس را کامل و بدون غلط وارد کنید؛ نوشتن https:// اختیاری است.</li>
+        <li>برخی سایت‌ها دسترسی ابزارهای خودکار را مسدود می‌کنند. اگر آدرس درست است، صفحه‌ی دیگری از همان سایت را امتحان کنید.</li>
+        <li>اگر مشکل از اتصال بود، چند لحظه بعد دوباره بررسی کنید.</li>
+      </ul>
+      {% endif %}
+    </div>
+    {% endif %}
 
-  <p class="scanner-note">
-    بررسی معمولاً چند ثانیه طول می‌کشه — صفحه رو دانلود، تحلیل، و
-    امتیازدهی می‌کنیم.
-  </p>
+    <section class="busy" id="busy" role="status" aria-live="polite" hidden>
+      <p class="busy-title">
+        <span id="busy-what">در حال بررسی صفحه</span>
+        <span class="busy-clock" id="busy-clock">۰ ثانیه</span>
+      </p>
+      <ol class="busy-steps">
+        <li>دریافت صفحه (در صورت نیاز با اجرای جاوااسکریپت)</li>
+        <li>تجزیه‌ی HTML</li>
+        <li>استخراج ۱۹ شاخص</li>
+        <li>نرمال‌سازی و امتیازدهی</li>
+        <li>ساخت گزارش و فایل PDF</li>
+      </ol>
+      <p class="busy-note">
+        مراحل بالا به‌ترتیب اجرا می‌شوند. پیشرفت هر مرحله جدا گزارش نمی‌شود؛ زمان سپری‌شده را می‌بینید.
+        بسته به سرعت سایت، چند ثانیه تا حدود یک دقیقه طول می‌کشد.
+      </p>
+    </section>
+
+    <details class="measured">
+      <summary>فهرست ۱۹ شاخصی که بررسی می‌شود</summary>
+      <div class="measured-grid">
+        {% for comp in component_overview %}
+        <section class="measured-group">
+          <h2>{{ comp.label }}</h2>
+          <ul>
+            {% for ind in comp.indicators %}
+            <li><span class="code" dir="ltr">{{ ind.code }}</span> {{ ind.label }}</li>
+            {% endfor %}
+          </ul>
+        </section>
+        {% endfor %}
+      </div>
+    </details>
+  </section>
 </div>
 
+<script>
+(function () {
+  var form = document.getElementById('scan-form');
+  var first = form.querySelector('input[name="url"]');
+  var firstName = document.getElementById('first-name');
+  var secondField = form.querySelector('.second-url-field');
+  var second = form.querySelector('.second-url');
+  var submit = document.getElementById('scan-submit');
+  var busy = document.getElementById('busy');
+  var busyWhat = document.getElementById('busy-what');
+  var clock = document.getElementById('busy-clock');
+  var radios = document.querySelectorAll('input[name="mode"]');
+  var timer = null;
+
+  function apply(mode) {
+    var compare = mode === 'compare';
+    form.action = compare ? form.dataset.compareAction : form.dataset.analyzeAction;
+    form.classList.toggle('compare-mode', compare);
+    secondField.hidden = !compare;
+    second.hidden = !compare;
+    second.disabled = !compare;
+    submit.textContent = compare ? 'مقایسه کن' : 'بررسی کن';
+    firstName.textContent = compare ? 'صفحه‌ی اول' : 'آدرس صفحه';
+  }
+
+  function stopBusy() {
+    if (timer) { clearInterval(timer); timer = null; }
+    busy.hidden = true;
+    submit.disabled = false;
+  }
+
+  radios.forEach(function (r) {
+    r.addEventListener('change', function () { if (r.checked) apply(r.value); });
+  });
+
+  form.addEventListener('submit', function () {
+    var compare = form.classList.contains('compare-mode');
+    busyWhat.textContent = compare ? 'در حال بررسی دو صفحه، پشت‌سرهم' : 'در حال بررسی صفحه';
+    busy.hidden = false;
+    busy.scrollIntoView({ block: 'center' });
+    submit.disabled = true;
+    var started = Date.now();
+    clock.textContent = '۰ ثانیه';
+    timer = setInterval(function () {
+      var sec = Math.floor((Date.now() - started) / 1000);
+      clock.textContent = sec.toLocaleString('fa-IR') + ' ثانیه';
+    }, 1000);
+  });
+
+  // برگشت با دکمه‌ی «بازگشت» مرورگر نباید صفحه را در حالت «در حال بررسی» رها کند
+  window.addEventListener('pageshow', function (e) { if (e.persisted) stopBusy(); });
+})();
+</script>
 {% endblock %}

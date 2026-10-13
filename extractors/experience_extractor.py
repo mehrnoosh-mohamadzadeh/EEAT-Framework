@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 
 from extractors.base import BaseExtractor, IndicatorResult
 from utils.text_utils import tokenize_words
+from utils.page_type import detect_page_type
 from utils.settings_loader import get_threshold
 from utils.json_ld_utils import flatten_json_ld_blocks
 from utils.wordpress_signals import has_wp_comment_form as _has_wp_comment_form
@@ -27,10 +28,30 @@ FIRST_PERSON_PATTERNS = [
     r"\bمن\b", r"تجربه من", r"من امتحان کردم", r"من استفاده کردم",
     r"وقتی من", r"در تجربه‌ام", r"به نظر من", r"من متوجه شدم",
 ]
-FIRST_PERSON_REGEX = re.compile("|".join(FIRST_PERSON_PATTERNS))
 
-# نشانه‌های صفحه محصول (برای قابلیت‌اعمال شرطی E2 — طبق نسخه ۳)
-PRODUCT_PAGE_INDICATORS = ["افزودن به سبد خرید", "add to cart", "قیمت:", "تومان"]
+# رفع محدودیت (بدون تغییر K=15 — طبق اعتبارسنجی تجربی انجام‌شده روی چند
+# نمونه‌ی واقعی: مقاله‌ی رسمی ۰ باقی ماند، مقاله‌ی واقعاً تجربه‌محور از
+# ۳۷٪ به حدود ۶۸٪ رسید): فارسی یک زبان pro-drop (ضمیرانداز) است — چون فعل
+# خودش شخص دستوری را با پسوند نشان می‌دهد، ضمیر «من» در عمل اغلب حذف
+# می‌شود (مثلاً «این دارو را امتحان کردم» یک بیان کاملاً اول‌شخص و
+# تجربه‌محور است ولی هیچ‌جایش «من» نیست). این یک واقعیت زبان‌شناسی
+# استاندارد است (نک. Windfuhr & Perry, "Persian Grammar"؛ ویکی‌پدیا:
+# Persian grammar — "Persian is a pro-drop language"). الگوهای زیر
+# فعل‌های صرف‌شده‌ی اول‌شخص مفرد را هم می‌گیرند، مستقل از حضور «من».
+FIRST_PERSON_VERB_PATTERNS = [
+    r"\bامتحان کردم\b", r"\bامتحان می‌کنم\b",
+    r"\bاستفاده کردم\b", r"\bاستفاده می‌کنم\b",
+    r"\bتجربه کردم\b", r"\bتجربه کرده‌ام\b",
+    r"\bمراجعه کردم\b", r"\bدریافت کردم\b",
+    r"\bدیدم\b", r"\bدیده‌ام\b",
+    r"\bفهمیدم\b", r"\bمتوجه شدم\b", r"\bاحساس کردم\b",
+    r"\bگرفتم\b", r"\bکردم\b", r"\bکرده‌ام\b", r"\bمی‌کنم\b",
+    r"\bبودم\b", r"\bداشتم\b", r"\bدادم\b", r"\bخوردم\b",
+    r"\bرفتم\b", r"\bشدم\b",
+]
+FIRST_PERSON_REGEX = re.compile("|".join(FIRST_PERSON_PATTERNS + FIRST_PERSON_VERB_PATTERNS))
+
+# تشخیص صفحه محصول (برای قابلیت‌اعمال شرطی E2): utils/page_type.py
 
 GENERIC_ALT_PATTERNS = ["img_", "image", "photo", "دانلود عکس", ""]
 
@@ -322,8 +343,10 @@ class ExperienceExtractor(BaseExtractor):
         می‌شود (اگر Hazm نصب نباشد، به‌طور خودکار به split ساده
         برمی‌گردد — رجوع کنید به utils/text_utils.py).
         """
-        full_text_lower = parsed_page.soup.get_text(separator=" ", strip=True).lower()
-        if any(indicator in full_text_lower for indicator in PRODUCT_PAGE_INDICATORS):
+        # تشخیص صفحه‌ی محصول سخت‌گیرانه شد (utils/page_type.py): «تومان» یا «قیمت:» به‌تنهایی
+        # دیگر کافی نیست، چون در خبر و مقاله‌ی مالی هم می‌آید و E2 را به‌ناحق کنار می‌گذاشت.
+        detected = detect_page_type(parsed_page)
+        if detected and detected["type"] == "product":
             return IndicatorResult(code="E2", value=None, applicable=False,
                                     raw_details={"reason": "detected_as_product_page"})
 

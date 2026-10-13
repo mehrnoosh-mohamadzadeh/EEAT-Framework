@@ -22,7 +22,7 @@ from reporting.reporter import export_to_csv, export_to_json
 def read_urls_from_csv(input_path: str) -> list[dict]:
     """خواندن ستون‌های url و (اختیاری) category از فایل CSV ورودی."""
     rows = []
-    with open(input_path, "r", encoding="utf-8") as f:
+    with open(input_path, "r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         for row in reader:
             if row.get("url", "").strip().startswith("#"):

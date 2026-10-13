@@ -24,6 +24,9 @@ thresholds:
   e3_review_count_for_full_score: 10
   t3_privacy_word_count_for_full_score: 300
   t6_freshness_days_cap: 730
+  # صفحه‌ای «ویدیومحور» حساب می‌شود که نشانه‌ی ویدیو دارد و متن محتوای اصلی‌اش
+  # کمتر از این تعداد کلمه است (رجوع به utils/page_type.py)
+  video_page_max_words: 200
 
 # منابع داده‌ی خارج از HTML خودِ صفحه — فاز ۵ (رفع بخشی از محدودیت
 # «فقط به HTML یک صفحه دسترسی داریم»). هرکدام کاملاً اختیاری‌اند؛ اگر

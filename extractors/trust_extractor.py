@@ -15,6 +15,7 @@ from utils.linked_page import fetch_linked_page_text, fetch_linked_page
 from utils.settings_loader import get_threshold, get_external_data_setting, get_fetcher_setting
 from utils.wayback import estimate_last_content_change
 from utils.json_ld_utils import flatten_json_ld_blocks
+from utils.page_type import detect_video_page
 from utils.wordpress_signals import is_wp_comment_form_tag
 from utils.address_patterns import ADDRESS_KEYWORD_PATTERN, ADDRESS_STRUCTURE_PATTERN, POSTAL_CODE_PATTERN
 from utils.link_matching import find_matching_link_href
@@ -441,7 +442,8 @@ class TrustExtractor(BaseExtractor):
         """
         for block in flatten_json_ld_blocks(json_ld_blocks):
             if isinstance(block, dict):
-                date_value = block.get("dateModified") or block.get("datePublished")
+                date_value = (block.get("dateModified") or block.get("datePublished")
+                              or block.get("uploadDate"))  # uploadDate: تاریخ بارگذاری VideoObject
                 if date_value:
                     return date_value
         return None
@@ -458,12 +460,17 @@ class TrustExtractor(BaseExtractor):
         سه نوع در صفحه بودند، فقط داخل @graph بسته‌بندی شده بودند.
         """
         found_types = set()
+        is_video = detect_video_page(parsed_page) is not None
         for block in flatten_json_ld_blocks(parsed_page.json_ld_blocks):
             if not isinstance(block, dict):
                 continue
             schema_type = block.get("@type", "")
             type_list = schema_type if isinstance(schema_type, list) else [schema_type]
             for t in type_list:
+                if t == "VideoObject" and is_video:
+                    # برای صفحه‌ی ویدیومحور، VideoObject جای «Article» را می‌گیرد
+                    # (نوع اصلی محتوا همان است)؛ برای بقیه‌ی صفحه‌ها هیچ تغییری نیست.
+                    found_types.add("Article")
                 if t in STRUCTURED_DATA_TYPES_EXPECTED:
                     found_types.add(t)
 

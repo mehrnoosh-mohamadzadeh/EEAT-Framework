@@ -307,6 +307,23 @@ class TestExperienceExtractor:
         result = ExperienceExtractor()._e2_first_person_density(parsed)
         assert result.applicable is True
 
+    def test_e2_catches_prodrop_first_person_verb_without_pronoun(self):
+        """
+        رگرسیون (اعتبارسنجی تجربی K=15 روی نمونه‌های واقعی): فارسی
+        pro-drop است، پس «این دارو را امتحان کردم» باید اول‌شخص
+        شمرده شود حتی بدون کلمه‌ی «من».
+        """
+        html = (
+            "<html><body><article><h1>مقاله</h1>"
+            "<p>" + ("این یک جمله خنثی و معمولی است. " * 40) +
+            "این دارو را امتحان کردم و نتیجه خوب بود. "
+            "بعد از چند روز فهمیدم که واقعا تجربه کردم چه حسی دارد."
+            "</p></article></body></html>"
+        )
+        parsed = parse_html(html, "https://test.ir/article")
+        result = ExperienceExtractor()._e2_first_person_density(parsed)
+        assert result.value > 0.0
+
     def test_e2_missing_for_too_short_text(self):
         """
         رگرسیون مورد ۱۰: صفحه ۶-۷ کلمه‌ای با یک «من» نباید امتیاز کامل

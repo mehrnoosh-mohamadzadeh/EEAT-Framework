@@ -31,6 +31,11 @@ class PageScore:
     excluded_indicators: dict = field(default_factory=dict)
     missing_indicators: dict = field(default_factory=dict)
     indicator_details: dict = field(default_factory=dict)
+    # فقط برای صفحه‌ی ویدیومحور یا محصول (utils/page_type.py): نوع صفحه، شاخص‌های قضاوت‌نشده
+    # با دلیل، و وزن مؤثر هر مؤلفه در امتیاز نهایی. برای صفحه‌ی معمولی None/خالی است.
+    page_type: str = "standard"
+    type_info: dict = field(default_factory=dict)
+    effective_weights: dict = field(default_factory=dict)
     # indicator_details: {"E1": {"value": 0.6, "missing": False, "applicable": True}, ...}
     # پر می‌شود توسط pipeline.py — برای نمایش جزئیات هر شاخص در گزارش نهایی/وب‌اپ
 
@@ -70,9 +75,16 @@ def compute_component_score(usable_indicators: dict) -> float | None:
     return sum(usable_indicators.values()) / len(usable_indicators)
 
 
-def compute_final_score(component_scores: dict, weights: dict) -> float:
+def compute_final_score(component_scores: dict, weights: dict,
+                        retention: dict | None = None) -> float:
     """
     ترکیب وزنی امتیاز مؤلفه‌ها.
+
+    retention (اختیاری، {نام مؤلفه: نسبت}): سهمی از شاخص‌های هر مؤلفه که
+    واقعاً قضاوت شده‌اند (مثلاً ۱/۴ برای Experience در صفحه‌ی ویدیومحور). وزن
+    مؤلفه در همین نسبت ضرب می‌شود؛ یعنی سهم هر شاخص باقی‌مانده همان سهم
+    طرح اصلی می‌ماند و فقط مجموع وزن‌ها دوباره به ۱ برگردانده می‌شود. اگر None
+    باشد، رفتار قبلی بدون هیچ تغییری حفظ می‌شود.
 
     اگر یک یا چند مؤلفه None باشند (هیچ شاخص usable‌ای نداشتند)،
     وزن آن‌ها از محاسبه کنار گذاشته می‌شود و وزن باقی مؤلفه‌ها به‌نسبت
@@ -90,9 +102,9 @@ def compute_final_score(component_scores: dict, weights: dict) -> float:
         "Trustworthiness": "trust",
     }
 
-    raw_weight_sum = sum(weights[weight_key_map[k]] for k in available)
-    final_score = sum(
-        available[k] * weights[weight_key_map[k]] for k in available
-    ) / raw_weight_sum
+    retention = retention or {}
+    eff = {k: weights[weight_key_map[k]] * retention.get(k, 1.0) for k in available}
+    raw_weight_sum = sum(eff.values())
+    final_score = sum(available[k] * eff[k] for k in available) / raw_weight_sum
 
     return final_score

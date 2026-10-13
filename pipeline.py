@@ -16,6 +16,8 @@ from extractors.authority_extractor import AuthorityExtractor
 from extractors.trust_extractor import TrustExtractor
 from normalization.normalizer import normalize_component_scores
 from scoring.scorer import compute_component_score, compute_final_score, PageScore
+from extractors.base import IndicatorResult
+from utils.page_type import PAGE_TYPES, detect_page_type
 
 
 EXTRACTORS = {
@@ -24,6 +26,10 @@ EXTRACTORS = {
     "Authoritativeness": AuthorityExtractor(),
     "Trustworthiness": TrustExtractor(),
 }
+
+
+_WEIGHT_KEYS = {"Experience": "experience", "Expertise": "expertise",
+                "Authoritativeness": "authority", "Trustworthiness": "trust"}
 
 
 class FetchFailedError(Exception):
@@ -77,8 +83,27 @@ def process_single_url(url: str, weights: dict, render_js: bool = False,
     missing_indicators = {}
     indicator_details = {}
 
+    # نوع صفحه (ویدیومحور/محصول): شاخص‌های نامرتبط با ماهیت آن قضاوت نمی‌شوند
+    # (utils/page_type.py). صفحه‌ی معمولی: page_info=None و هیچ‌چیز تغییر نمی‌کند.
+    page_info = detect_page_type(parsed_page)
+    excluded_for_type = PAGE_TYPES[page_info["type"]]["excluded"] if page_info else {}
+    retention = {}
+
     for component_name, extractor in EXTRACTORS.items():
         indicator_results = extractor.extract(parsed_page)
+
+        if page_info:
+            total = len(indicator_results)
+            indicator_results = [
+                IndicatorResult(code=r.code, value=None, applicable=False,
+                                raw_details={"reason": f"{page_info['type']}_page",
+                                             "note": excluded_for_type[r.code]})
+                if r.code in excluded_for_type else r
+                for r in indicator_results
+            ]
+            kept = sum(1 for r in indicator_results if r.code not in excluded_for_type)
+            if total and kept < total:
+                retention[component_name] = kept / total
 
         for result in indicator_results:
             indicator_details[result.code] = {
@@ -95,7 +120,15 @@ def process_single_url(url: str, weights: dict, render_js: bool = False,
         if normalized["missing_indicators"]:
             missing_indicators[component_name] = normalized["missing_indicators"]
 
-    final_score = compute_final_score(component_scores, weights)
+    final_score = compute_final_score(component_scores, weights,
+                                      retention=retention if page_info else None)
+
+    effective = {}
+    if page_info:
+        avail = {k: v for k, v in component_scores.items() if v is not None}
+        raw = {k: weights[_WEIGHT_KEYS[k]] * retention.get(k, 1.0) for k in avail}
+        total_w = sum(raw.values())
+        effective = {k: v / total_w for k, v in raw.items()}
 
     return PageScore(
         url=url,
@@ -105,6 +138,9 @@ def process_single_url(url: str, weights: dict, render_js: bool = False,
         excluded_indicators=excluded_indicators,
         missing_indicators=missing_indicators,
         indicator_details=indicator_details,
+        page_type=page_info["type"] if page_info else "standard",
+        type_info=({**page_info, "excluded": dict(excluded_for_type)} if page_info else {}),
+        effective_weights=effective,
     )
 
 

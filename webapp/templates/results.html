@@ -1,77 +1,167 @@
 {% extends "base.html" %}
-{% block title %}نتیجه بررسی — {{ url }}{% endblock %}
+{% from "_ui.html" import mark, word, track %}
+{% block title %}نتیجه‌ی بررسی — {{ display_url }}{% endblock %}
+{% block masthead_extra %}
+<a href="{{ url_for('index') }}" class="back-link">بررسی صفحه‌ی دیگر</a>
+{% endblock %}
 {% block content %}
 
-<div class="report">
-  <a href="{{ url_for('index') }}" class="back-link">← بررسی صفحه دیگر</a>
+{# شمارش وضعیت شاخص‌ها — فقط از داده‌ی همین گزارش #}
+{% set ns = namespace(good=0, warn=0, fail=0, missing=0, na=0, total=0) %}
+{% for c in components %}{% for i in c.indicators %}
+  {% set ns.total = ns.total + 1 %}
+  {% if i.status == 'pass' %}{% set ns.good = ns.good + 1 %}
+  {% elif i.status == 'warn' %}{% set ns.warn = ns.warn + 1 %}
+  {% elif i.status == 'fail' %}{% set ns.fail = ns.fail + 1 %}
+  {% elif i.status == 'missing' %}{% set ns.missing = ns.missing + 1 %}
+  {% else %}{% set ns.na = ns.na + 1 %}{% endif %}
+{% endfor %}{% endfor %}
+{% set ranked = components | selectattr('score_percent', 'ne', none) | sort(attribute='score_percent') | list %}
 
-  <p class="eyebrow">گزارش ارزیابی</p>
-  <p class="report-url" title="{{ url }}">
-    <a href="{{ url }}" target="_blank" rel="noopener">{{ display_url }}</a>
-  </p>
+<article class="page report">
 
-  <form action="{{ url_for('analyze') }}" method="post" class="quick-scan-form">
-    <input type="text" name="url" placeholder="آدرس صفحه دیگری را وارد کن" required>
-    <button type="submit">بررسی کن</button>
-  </form>
-
-  <div class="hero">
-    <div class="gauge" style="--percent: {{ final_score_percent }}">
-      <div class="gauge-inner">
-        <span class="gauge-number">{{ final_score_percent }}</span>
-        <span class="gauge-unit">از ۱۰۰</span>
-      </div>
+  {# ۱. عنوان و صفحه‌ی بررسی‌شده #}
+  <header class="page-head">
+    <h1 class="page-title">نتیجه‌ی بررسی</h1>
+    <p class="page-url">
+      <span class="page-url-label">صفحه‌ی بررسی‌شده</span>
+      <a href="{{ url }}" dir="ltr" target="_blank" rel="noopener" title="{{ url }}">{{ display_url }}</a>
+    </p>
+    {% if pdf_token %}
+    <div class="page-actions">
+      <a href="{{ url_for('download_pdf', token=pdf_token) }}" class="btn" download>دانلود گزارش کامل (PDF)</a>
     </div>
-    <p class="gauge-label">امتیاز نهایی E-E-A-T</p>
-  </div>
+    {% endif %}
+  </header>
 
-  <div class="component-grid">
-    {% for c in components %}
-    <div class="component-card status-{{ c.status }}">
-      <div class="component-head">
-        <span class="component-name">{{ c.label }}</span>
-        <span class="component-percent mono">
-          {% if c.score_percent is not none %}{{ c.score_percent }}٪{% else %}—{% endif %}
-        </span>
-      </div>
-      <div class="bar-track">
-        <div class="bar-fill status-{{ c.status }}" style="width: {{ c.score_percent or 0 }}%"></div>
-      </div>
-    </div>
-    {% endfor %}
-  </div>
+  {# ۲ و ۳. نتیجه‌ی اصلی: امتیاز نهایی و چهار مؤلفه #}
+  <section class="result" aria-label="نتیجه‌ی اصلی">
+    <div class="result-top">
+      <svg class="gauge" viewBox="-12 -16 324 214" role="img"
+           aria-label="امتیاز نهایی {{ final_score_percent }} از 100">
+        <path d="M270 150 A120 120 0 0 0 30 150" class="gauge-track" pathLength="100"/>
+        <path d="M270 150 A120 120 0 0 0 30 150" class="gauge-fill" pathLength="100"
+              stroke-dasharray="{{ final_score_percent }} 100"/>
+        {% for t in (thresholds.fail, thresholds.pass) %}
+        <g transform="rotate({{ -(t * 1.8) }} 150 150)">
+          <line x1="256" y1="150" x2="286" y2="150" class="gauge-tick"/>
+          <text x="302" y="150" class="gauge-tick-label" text-anchor="middle" dominant-baseline="central"
+                transform="rotate({{ t * 1.8 }} 302 150)">{{ t }}</text>
+        </g>
+        {% endfor %}
+        <text x="150" y="138" class="gauge-number" text-anchor="middle">{{ final_score_percent }}</text>
+        <text x="150" y="176" class="gauge-unit" text-anchor="middle">از 100</text>
+        <text x="270" y="176" class="gauge-end" text-anchor="middle">0</text>
+        <text x="30" y="176" class="gauge-end" text-anchor="middle">100</text>
+      </svg>
 
-  <h2 class="checklist-title">جزئیات هر شاخص</h2>
-
-  {% for c in components %}
-  <div class="checklist-group">
-    <h3 class="checklist-group-title">{{ c.label }}</h3>
-    <div class="checklist">
-      {% for ind in c.indicators %}
-      <div class="check-row">
-        <span class="dot {{ ind.status }}"></span>
-        <span class="check-label">{{ ind.label }}</span>
-        <span class="check-code mono">{{ ind.code }}</span>
-        <span class="check-value mono">
-          {% if ind.status == 'not_applicable' %}غیرقابل‌اعمال
-          {% elif ind.status == 'missing' %}داده نامشخص
-          {% else %}{{ ind.value_percent }}٪
+      <div class="summary">
+        <h2 class="section-title">امتیاز نهایی</h2>
+        <p class="verdict">{{ mark(final_status) }} <span>{{ word(final_status, final_score_percent) }}</span></p>
+        <p class="summary-text">
+          میانگین وزنی چهار مؤلفه.
+          {% if ranked | length >= 2 and ranked[0].score_percent != ranked[-1].score_percent %}
+          بالاترین مؤلفه {{ ranked[-1].label }} ({{ ranked[-1].score_percent }}٪) و پایین‌ترین {{ ranked[0].label }} ({{ ranked[0].score_percent }}٪) است.
           {% endif %}
-        </span>
+        </p>
+        {% if type_note %}<p class="type-note" role="note">{{ type_note }}</p>{% endif %}
+        <p class="counts-title">از {{ ns.total }} شاخص</p>
+        <ul class="counts">
+          <li class="{% if not ns.good %}is-zero{% endif %}">{{ mark('pass') }}<strong>{{ ns.good }}</strong> وضعیت خوب</li>
+          <li class="{% if not ns.warn %}is-zero{% endif %}">{{ mark('warn') }}<strong>{{ ns.warn }}</strong> نیاز به بهبود</li>
+          <li class="{% if not ns.fail %}is-zero{% endif %}">{{ mark('fail') }}<strong>{{ ns.fail }}</strong> ضعیف یا صفر</li>
+          <li class="{% if not ns.missing %}is-zero{% endif %}">{{ mark('missing') }}<strong>{{ ns.missing }}</strong> داده ناموجود</li>
+          <li class="{% if not ns.na %}is-zero{% endif %}">{{ mark('not_applicable') }}<strong>{{ ns.na }}</strong> غیرقابل اعمال</li>
+        </ul>
       </div>
-      {% if ind.evidence %}
-      <div class="check-evidence mono">{{ ind.evidence }}</div>
-      {% endif %}
-      {% if ind.tip %}
-      <div class="check-tip">
-        <span class="check-tip-arrow">↳</span> {{ ind.tip }}
-      </div>
-      {% endif %}
-      {% endfor %}
     </div>
-  </div>
-  {% endfor %}
 
-</div>
+    <div class="result-parts">
+      <h2 class="section-title">چهار مؤلفه</h2>
+      <div class="axis" aria-hidden="true">
+        <span class="band" style="inset-inline-start: 0; width: var(--t-fail)">ضعیف</span>
+        <span class="band" style="inset-inline-start: var(--t-fail); width: calc(var(--t-pass) - var(--t-fail))">نیاز به بهبود</span>
+        <span class="band" style="inset-inline-start: var(--t-pass); width: calc(100% - var(--t-pass))">خوب</span>
+      </div>
+      <p class="axis-note">خط‌های عمودی آستانه‌اند: کمتر از {{ thresholds.fail }} ضعیف، تا {{ thresholds.pass }} نیاز به بهبود، بالاتر خوب.</p>
+      <ul class="part-rows">
+        {% for c in components %}
+        <li class="part-row">
+          <a class="part-name" href="#comp-{{ c.key }}">{{ c.label }}</a>
+          {{ track(c.score_percent, c.status) }}
+          <span class="part-value">{% if c.score_percent is not none %}{{ c.score_percent }}٪{% else %}<span class="muted">ناموجود</span>{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </section>
 
+  {# ۴. جزئیات شاخص‌ها #}
+  <section class="details">
+    <h2 class="block-title">جزئیات شاخص‌ها</h2>
+    {% for c in components %}
+    <section class="comp" id="comp-{{ c.key }}">
+      <header class="comp-head">
+        <h3>{{ c.label }}</h3>
+        <p class="comp-score">
+          {% if c.score_percent is not none %}
+          <strong>{{ c.score_percent }}٪</strong> <span>{{ word(c.status, c.score_percent) }}</span>
+          {% else %}<span>امتیاز مؤلفه ناموجود</span>{% endif %}
+        </p>
+      </header>
+
+      <ul class="ind-list">
+        {% for ind in c.indicators %}
+        <li class="ind is-{{ ind.status }}">
+          <div class="ind-row">
+            <span class="ind-mark">{{ mark(ind.status) }}</span>
+            <h4 class="ind-label">{{ ind.label }} <span class="code" dir="ltr">{{ ind.code }}</span></h4>
+            <div class="ind-value">
+              {{ track(ind.value_percent, ind.status) }}
+              <span class="ind-num">{% if ind.status in ('missing', 'not_applicable') %}—{% else %}{{ ind.value_percent }}٪{% endif %}</span>
+              <span class="ind-word">{{ word(ind.status, ind.value_percent) }}</span>
+            </div>
+          </div>
+          {% if ind.evidence or ind.tip %}
+          <div class="ind-body">
+            {% if ind.evidence %}
+            <ul class="facts">
+              <li class="why-label">چرا این نمره</li>
+              {% for part in ind.evidence.split(' | ') %}
+              {% set kv = part.split(': ', 1) %}
+              <li>{% if kv | length == 2 %}<span class="k">{{ kv[0] }}</span> <bdi class="v">{{ kv[1] }}</bdi>{% else %}<bdi class="v">{{ part }}</bdi>{% endif %}</li>
+              {% endfor %}
+            </ul>
+            {% endif %}
+            {% if ind.tip %}
+            <p class="tip"><strong>برای بهبود</strong> {{ ind.tip }}</p>
+            {% endif %}
+          </div>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endfor %}
+  </section>
+
+  {# ۵. توضیح وضعیت‌ها و بررسی صفحه‌ی بعد #}
+  <section class="guide">
+    <h2 class="block-title">معنی وضعیت‌ها</h2>
+    <dl class="legend">
+      <div><dt>امتیاز صفر</dt><dd>شاخص سنجیده شد و هیچ نشانه‌ای پیدا نشد.</dd></div>
+      <div><dt>داده ناموجود</dt><dd>داده‌ی کافی برای سنجش نبود؛ در میانگین نمی‌آید.</dd></div>
+      <div><dt>غیرقابل اعمال</dt><dd>این شاخص برای این نوع صفحه معنا ندارد؛ آن هم در میانگین نمی‌آید.</dd></div>
+    </dl>
+  </section>
+
+  <section class="again">
+    <h2 class="block-title">بررسی صفحه‌ی دیگر</h2>
+    <form action="{{ url_for('analyze') }}" method="post" class="again-form">
+      <input type="text" name="url" placeholder="آدرس صفحه‌ی دیگری را وارد کنید" aria-label="آدرس صفحه‌ی دیگر" autocomplete="off" required>
+      <button type="submit" class="btn">بررسی کن</button>
+    </form>
+  </section>
+
+</article>
 {% endblock %}

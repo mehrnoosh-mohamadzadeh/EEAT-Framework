@@ -1,0 +1,33 @@
+{# اجزای مشترک نمایش وضعیت — نشانه‌ی وضعیت هم با شکل و هم با واژه معنی می‌شود، نه فقط رنگ #}
+
+{% macro mark(status) -%}
+<svg class="mark mark-{{ status }}" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false">
+  {%- if status == 'pass' %}
+  <circle cx="10" cy="10" r="8" class="m-solid"/>
+  {%- elif status == 'warn' %}
+  <circle cx="10" cy="10" r="7.25" class="m-ring"/>
+  <path d="M10 2.75 A7.25 7.25 0 0 0 10 17.25 Z" class="m-solid"/>
+  {%- elif status == 'fail' %}
+  <circle cx="10" cy="10" r="7.25" class="m-ring m-thick"/>
+  {%- elif status == 'missing' %}
+  <circle cx="10" cy="10" r="7.25" class="m-ring m-dash"/>
+  {%- else %}
+  <path d="M4 10 H16" class="m-ring m-line"/>
+  {%- endif %}
+</svg>
+{%- endmacro %}
+
+{% macro word(status, percent) -%}
+{%- if status == 'pass' %}وضعیت خوب
+{%- elif status == 'warn' %}نیاز به بهبود
+{%- elif status == 'fail' %}{% if percent == 0 %}امتیاز صفر{% else %}ضعیف{% endif %}
+{%- elif status == 'missing' %}داده ناموجود
+{%- else %}غیرقابل اعمال{% endif -%}
+{%- endmacro %}
+
+{# نوار ۰ تا ۱۰۰ با نشانه‌ی آستانه‌ها. «ناموجود» خط‌چین است، «غیرقابل اعمال» فقط یک خط کم‌رنگ؛ هیچ‌کدام شبیه «صفر» نیستند #}
+{% macro track(percent, status, tone='') -%}
+<span class="track is-{{ status }} {{ tone }}" aria-hidden="true">
+  {%- if percent is not none and status not in ('missing', 'not_applicable') %}<span class="fill" style="width: {{ percent }}%"></span>{% endif -%}
+</span>
+{%- endmacro %}

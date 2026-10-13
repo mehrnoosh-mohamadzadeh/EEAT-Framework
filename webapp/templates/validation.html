@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}اعتبارسنجی با داور انسانی — ارزیاب E-E-A-T{% endblock %}
+{% block masthead_extra %}<a class="masthead-link" href="{{ url_for('index') }}">بازگشت به ارزیابی</a>{% endblock %}
+
+{% macro scatter(points) %}
+{# محور افقی: نمره‌ی انسانی ۱ تا ۵؛ محور عمودی: نمره‌ی ابزار ۰ تا ۱۰۰. دایره‌های نیمه‌شفاف: نقطه‌های روی هم تیره‌تر دیده می‌شوند. #}
+<svg class="scatter" viewBox="0 0 240 200" role="img" aria-label="نمودار پراکندگی نمره‌ی انسانی در برابر نمره‌ی ابزار">
+  {% for v in [0, 20, 40, 60, 80, 100] %}
+  <line x1="30" x2="230" y1="{{ 170 - v * 1.5 }}" y2="{{ 170 - v * 1.5 }}" class="sc-grid"/>
+  <text x="26" y="{{ 173 - v * 1.5 }}" class="sc-tick" text-anchor="end">{{ v }}</text>
+  {% endfor %}
+  {% for h in [1, 2, 3, 4, 5] %}
+  <text x="{{ 30 + (h - 1) * 50 }}" y="186" class="sc-tick" text-anchor="middle">{{ h }}</text>
+  {% endfor %}
+  {% for h, t in points %}
+  <circle cx="{{ 30 + (h - 1) * 50 }}" cy="{{ 170 - t * 150 }}" r="4.5" class="sc-dot"/>
+  {% endfor %}
+</svg>
+{% endmacro %}
+
+{% block content %}
+<div class="page">
+  <header class="page-head">
+    <h1 class="page-title">اعتبارسنجی با داور انسانی</h1>
+    <p class="lede">
+      می‌سنجد نمره‌ی ابزار تا چه حد با قضاوت یک انسان هم‌جهت است. نمره‌دهی انسانی را خودتان انجام می‌دهید؛
+      این صفحه فقط برگه را آماده و نتیجه را محاسبه می‌کند.
+    </p>
+  </header>
+
+  {% if error %}
+  <div class="notice" role="alert"><p class="notice-title">{{ error }}</p></div>
+  {% endif %}
+
+  {% if not report %}
+  <section>
+    <h2 class="block-title">مراحل کار</h2>
+    <ol class="vsteps">
+      <li><strong>نتایج ابزار را بگیرید.</strong> آدرس صفحه‌ها را در یک فایل جدولی بگذارید و با دستور
+        <bdi class="code-inline" dir="ltr">python main.py --input data/urls.csv --output results.csv</bdi> اجرا کنید.</li>
+      <li><strong>برگه‌ی نمره‌دهی کور بسازید.</strong> همان فایل را در فرم اول بارگذاری کنید. برگه فقط آدرس دارد،
+        پس نمره‌ی ابزار را نمی‌بینید و قضاوتتان از آن اثر نمی‌گیرد.</li>
+      <li><strong>نمره بدهید.</strong> به هر مؤلفه عدد صحیح ۱ تا ۵ بدهید، طبق راهنمای
+        <bdi class="code-inline" dir="ltr">data/rating_rubric.md</bdi>، و هر صفحه را فقط یک بار.</li>
+      <li><strong>نتیجه را ببینید.</strong> فایل نتایج ابزار و برگه‌ی پرشده را در فرم دوم بگذارید.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2 class="block-title">۱. ساخت برگه‌ی نمره‌دهی</h2>
+    <form class="vform" action="{{ url_for('validation.blank_sheet') }}" method="post" enctype="multipart/form-data">
+      <label class="vfield"><span>فایل نتایج ابزار</span>
+        <input type="file" name="framework_csv" accept=".csv,.xlsx,text/csv" required></label>
+      <button type="submit" name="fmt" value="xlsx" class="btn">دانلود برگه‌ی خالی (اکسل)</button>
+      <button type="submit" name="fmt" value="csv" class="btn btn-quiet">دانلود CSV (بدون عرض ستون)</button>
+    </form>
+    <p class="vnote">برگه‌ی اکسل عرض ستون ثابت و قابل‌تغییر دارد (لبه‌ی ستون را بکشید)، آدرس‌ها بلند نمی‌شوند و با یک کلیک باز می‌شوند،
+      و فقط عدد صحیح ۱ تا ۵ می‌پذیرد. پس از نمره‌دادن لازم نیست آن را به CSV تبدیل کنید؛ همان فایل اکسل را در فرم دوم بدهید.
+      فایل CSV نمی‌تواند عرض ستون نگه دارد.</p>
+  </section>
+
+  <section>
+    <h2 class="block-title">۲. محاسبه‌ی همبستگی</h2>
+    <form class="vform" action="{{ url_for('validation.analyze_validation') }}" method="post" enctype="multipart/form-data">
+      <label class="vfield"><span>فایل نتایج ابزار</span>
+        <input type="file" name="framework_csv" accept=".csv,.xlsx,text/csv" required></label>
+      <label class="vfield"><span>برگه‌ی نمره‌ی داور (پرشده)</span>
+        <input type="file" name="human_csv" accept=".csv,.xlsx,text/csv" required></label>
+      <button type="submit" class="btn">محاسبه</button>
+    </form>
+    <p class="vnote">هر دو قالب اکسل (.xlsx) و CSV پذیرفته می‌شود؛ اگر CSV می‌دهید باید با رمزنگاری UTF-8 ذخیره شود (در اکسل: «CSV UTF-8»). حداکثر ۱ مگابایت برای هر فایل.
+      فایل‌ها ذخیره نمی‌شوند؛ فقط در همین درخواست خوانده می‌شوند.</p>
+  </section>
+
+  {% else %}
+  <section class="result">
+    <h2 class="block-title">نتیجه</h2>
+    <p class="vnote">از {{ report.counts.tool_pages }} صفحه‌ی فایل ابزار و {{ report.counts.rated_pages }} صفحه‌ی نمره‌داده‌شده،
+      {{ report.counts.matched }} صفحه در هر دو فایل بود.
+      {% if report.counts.only_human %}{{ report.counts.only_human }} صفحه‌ی نمره‌داده‌شده در فایل ابزار نبود (آدرس‌ها را بررسی کنید).{% endif %}
+      {% if report.counts.unrated %}{{ report.counts.unrated }} صفحه نمره‌ی خالی داشت.{% endif %}</p>
+
+    <div class="vtable-wrap">
+    <table class="vtable">
+      <thead><tr><th scope="col">مؤلفه</th><th scope="col">همبستگی اسپیرمن</th><th scope="col">قدرت</th>
+        <th scope="col">فاصله‌ی اطمینان ۹۵٪ (تقریبی)</th><th scope="col">تعداد</th><th scope="col">مقدار احتمال</th>
+        <th scope="col">تاو کندال</th></tr></thead>
+      <tbody>
+      {% for key, label in rows %}
+        {% set r = report.results[key] %}
+        <tr>
+          <th scope="row">{{ label }}</th>
+          {% if r %}
+          <td class="num"><bdi dir="ltr">{{ '%.2f' % r.rho }}</bdi></td>
+          <td>{{ r.strength }}</td>
+          <td class="num">{% if r.ci_low is not none %}<bdi dir="ltr">[{{ '%.2f' % r.ci_low }}, {{ '%.2f' % r.ci_high }}]</bdi>{% else %}—{% endif %}</td>
+          <td class="num">{{ r.n }}</td>
+          <td class="num">{% if r.p_value < 0.001 %}کمتر از <bdi dir="ltr">0.001</bdi>{% else %}<bdi dir="ltr">{{ '%.3f' % r.p_value }}</bdi>{% endif %}</td>
+          <td class="num"><bdi dir="ltr">{{ '%.2f' % r.tau }}</bdi></td>
+          {% else %}
+          <td colspan="6" class="muted">داده‌ی کافی نبود (دست‌کم ۳ صفحه با نمره‌ی کامل و مقدارهای غیریکسان)</td>
+          {% endif %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <p class="vnote">«امتیاز نهایی» میانگین چهار نمره‌ی انسانی را با امتیاز نهایی ابزار می‌سنجد. فاصله‌ی اطمینان فقط از
+      ۱۰ صفحه به بالا محاسبه می‌شود.</p>
+  </section>
+
+  <section>
+    <h2 class="block-title">نمودار پراکندگی</h2>
+    <div class="scatter-grid">
+      {% for key, label in rows %}{% set r = report.results[key] %}{% if r %}
+      <figure>{{ scatter(r.points) }}<figcaption>{{ label }}</figcaption></figure>
+      {% endif %}{% endfor %}
+    </div>
+    <p class="vnote">محور افقی نمره‌ی انسانی (۱ تا ۵)، محور عمودی نمره‌ی ابزار (۰ تا ۱۰۰). نقطه‌هایی که روی هم می‌افتند تیره‌تر دیده می‌شوند.</p>
+  </section>
+
+  <section>
+    <h2 class="block-title">هشدارهای روش‌شناختی</h2>
+    <ul class="vwarn">{% for w in report.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  </section>
+
+  <section>
+    <h2 class="block-title">پیش‌نویس متن فصل نتایج</h2>
+    <p class="vnote">فقط از عددهای بالا ساخته شده است؛ تفسیر و جمع‌بندی با خودتان.</p>
+    <textarea class="vtext" readonly rows="9">{{ paragraph }}</textarea>
+  </section>
+
+  <p><a class="btn btn-quiet" href="{{ url_for('validation.validation_page') }}">اعتبارسنجی دیگر</a></p>
+  {% endif %}
+</div>
+{% endblock %}

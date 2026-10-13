@@ -4,13 +4,20 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{% block title %}ارزیاب E-E-A-T{% endblock %}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<style>:root { --t-fail: {{ thresholds.fail }}%; --t-pass: {{ thresholds.pass }}%; }</style>
 </head>
 <body>
-<div class="page">
+<header class="masthead">
+  <div class="wrap masthead-row">
+    <a class="brand" href="{{ url_for('index') }}">
+      <span class="brand-name">ارزیاب E-E-A-T</span>
+    </a>
+    {% block masthead_extra %}<a class="masthead-link" href="{{ url_for('validation.validation_page') }}">اعتبارسنجی با داور انسانی</a>{% endblock %}
+  </div>
+</header>
+<main class="wrap">
 {% block content %}{% endblock %}
-</div>
+</main>
 </body>
 </html>

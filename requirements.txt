@@ -8,3 +8,7 @@ jdatetime
 scipy
 PyYAML
 pytest
+reportlab
+arabic-reshaper
+python-bidi
+openpyxl

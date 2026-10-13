@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% from "_ui.html" import mark, word, track %}
+{% block title %}مقایسه‌ی دو صفحه — {{ a.display_url }} و {{ b.display_url }}{% endblock %}
+{% block masthead_extra %}
+<a href="{{ url_for('index') }}" class="back-link">بررسی صفحه‌ی دیگر</a>
+{% endblock %}
+{% block content %}
+
+{% macro side_name(key) %}{{ 'صفحه‌ی اول' if key == 'a' else 'صفحه‌ی دوم' }}{% endmacro %}
+
+{% macro cell(side, is_win) -%}
+<div class="cmp-cell{% if is_win %} is-win{% endif %} is-{{ side.status }}">
+  {{ track(side.percent, side.status, 'tone-main' if is_win else '') }}
+  <span class="cmp-num">{% if side.status in ('missing', 'not_applicable') or side.percent is none %}—{% else %}{{ side.percent }}٪{% endif %}</span>
+  <span class="cmp-word">{{ word(side.status, side.percent) }}</span>
+</div>
+{%- endmacro %}
+
+{% macro verdict(result, diff) -%}
+{%- if result == 'tie' %}مساوی
+{%- elif result == 'none' %}بدون قضاوت
+{%- else %}اختلاف {{ diff | abs }}{% endif -%}
+{%- endmacro %}
+
+<article class="page report compare-report">
+
+  <header class="page-head">
+    <h1 class="page-title">مقایسه‌ی دو صفحه</h1>
+    <ul class="page-urls">
+      {% for key, ctx in (('a', a), ('b', b)) %}
+      <li class="page-url">
+        <span class="page-url-label">{{ side_name(key) }}</span>
+        <a href="{{ ctx.url }}" dir="ltr" target="_blank" rel="noopener" title="{{ ctx.url }}">{{ ctx.display_url }}</a>
+      </li>
+      {% endfor %}
+    </ul>
+    {% if pdf_token %}
+    <div class="page-actions">
+      <a href="{{ url_for('download_compare_pdf', token=pdf_token) }}" class="btn" download>دانلود گزارش مقایسه (PDF)</a>
+    </div>
+    {% endif %}
+  </header>
+
+  <section class="result" aria-label="نتیجه‌ی اصلی">
+    <div class="final-pair">
+      {% for key in ('a', 'b') %}
+      <div class="final-side{% if final.result == key %} is-win{% endif %}">
+        <h2 class="final-name">{{ side_name(key) }}</h2>
+        <p class="final-number">{{ final[key] }}<span class="final-pct">٪</span></p>
+        <p class="final-state">
+          {% if final.result == key %}{{ mark('pass') }} <strong>برنده در امتیاز نهایی</strong>
+          {% elif final.result == 'tie' %}مساوی
+          {% else %}امتیاز نهایی{% endif %}
+        </p>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="final-verdict">
+      {% if final.result == 'tie' %}امتیاز نهایی دو صفحه برابر است؛ برنده‌ای اعلام نمی‌شود.
+      {% elif final.result == 'none' %}مقایسه‌ی امتیاز نهایی ممکن نیست.
+      {% else %}امتیاز نهایی {{ side_name(final.result) }} {{ final.diff | abs }} واحد درصد بیشتر است.{% endif %}
+      از ۱۹ شاخص: صفحه‌ی اول در {{ tally.a }}، صفحه‌ی دوم در {{ tally.b }}،
+      مساوی در {{ tally.tie }}، و بدون قضاوت در {{ tally.none }} شاخص بهتر بود.
+    </p>
+    {% for note in type_notes %}<p class="honesty" role="note">{{ note }}</p>{% endfor %}
+    <p class="honesty" role="note">{{ disclaimer }}</p>
+  </section>
+
+  <section class="details">
+    <h2 class="block-title">مقایسه‌ی مؤلفه‌ها</h2>
+    <div class="cmp-colhead" aria-hidden="true"><span></span><span>صفحه‌ی اول</span><span></span><span>صفحه‌ی دوم</span></div>
+    <ul class="cmp-rows">
+      {% for c in components %}
+      <li class="cmp-row">
+        <a class="cmp-label" href="#comp-{{ c.key }}">{{ c.label }}</a>
+        {{ cell(c.a, c.result == 'a') }}
+        <span class="cmp-diff">{{ verdict(c.result, c.diff) }}</span>
+        {{ cell(c.b, c.result == 'b') }}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  <section class="details">
+    <h2 class="block-title">جزئیات هر شاخص</h2>
+    {% for c in components %}
+    <section class="comp" id="comp-{{ c.key }}">
+      <header class="comp-head"><h3>{{ c.label }}</h3></header>
+      <div class="cmp-colhead" aria-hidden="true"><span></span><span>صفحه‌ی اول</span><span></span><span>صفحه‌ی دوم</span></div>
+      <ul class="cmp-rows">
+        {% for ind in c.indicators %}
+        <li class="cmp-row cmp-ind">
+          <h4 class="cmp-label">{{ ind.label }} <span class="code" dir="ltr">{{ ind.code }}</span></h4>
+          {{ cell(ind.a, ind.result == 'a') }}
+          <span class="cmp-diff">{{ verdict(ind.result, ind.diff) }}{% if ind.result in ('a', 'b') %} <span class="visually-hidden">(برنده: {{ side_name(ind.result) }})</span>{% endif %}</span>
+          {{ cell(ind.b, ind.result == 'b') }}
+          {% if ind.a.evidence or ind.b.evidence %}
+          <div class="cmp-why">
+            <div class="facts-box">{{ ind.a.evidence or '—' }}</div>
+            <div class="facts-box">{{ ind.b.evidence or '—' }}</div>
+          </div>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endfor %}
+  </section>
+
+</article>
+{% endblock %}
